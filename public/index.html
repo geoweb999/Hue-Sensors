@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hue Temperature Dashboard</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="header-content">
+      <h1>Hue Temperature Dashboard</h1>
+      <button id="settings-btn" class="settings-btn" aria-label="Settings">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 1v6m0 6v6m0-12a9 9 0 0 1 9 9m-18 0a9 9 0 0 1 9-9"></path>
+          <path d="M19.4 15c.7-.3 1.5-.5 2.3-.5a1 1 0 0 0 .7-.3l.3-.3a1 1 0 0 0 0-1.4l-.3-.3a1 1 0 0 0-.7-.3c-.8 0-1.6-.2-2.3-.5m-14.8 0c-.7-.3-1.5-.5-2.3-.5a1 1 0 0 1-.7-.3l-.3-.3a1 1 0 0 1 0-1.4l.3-.3a1 1 0 0 1 .7-.3c.8 0 1.6-.2 2.3-.5"></path>
+          <path d="M9.5 15.5a9 9 0 0 0 5 0m-5-7a9 9 0 0 1 5 0"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="status-bar">
+      <div id="status-indicator" class="status-indicator">
+        <span class="status-dot"></span>
+        <span id="status-text">Connecting...</span>
+      </div>
+      <div id="last-update">Last update: --</div>
+    </div>
+  </header>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button class="close-btn" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-group">
+          <label for="poll-rate">Poll Rate (seconds):</label>
+          <input type="number" id="poll-rate" min="1" max="300" value="10">
+          <span class="setting-description">How often to poll the Hue Bridge</span>
+        </div>
+
+        <div class="setting-group">
+          <label>Y-Axis Scaling:</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="y-axis-mode" value="auto" checked>
+              <span>Auto-scaling</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="y-axis-mode" value="manual">
+              <span>Manual</span>
+            </label>
+          </div>
+        </div>
+
+        <div id="manual-bounds" class="setting-group manual-bounds" style="display: none;">
+          <label for="y-axis-min">Lower Bound (°F):</label>
+          <input type="number" id="y-axis-min" value="60" step="1">
+
+          <label for="y-axis-max">Upper Bound (°F):</label>
+          <input type="number" id="y-axis-max" value="80" step="1">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="save-settings" class="btn-primary">Save Settings</button>
+        <button id="cancel-settings" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Loading temperature data...</p>
+    </div>
+
+    <div id="error" class="error hidden">
+      <p id="error-message"></p>
+    </div>
+
+    <div id="rooms-container" class="rooms-container">
+      <!-- Room cards will be dynamically inserted here -->
+    </div>
+
+    <div id="no-data" class="no-data hidden">
+      <p>No temperature sensors found. Make sure your Hue Bridge has temperature sensors and they are accessible.</p>
+    </div>
+  </main>
+
+  <footer>
+    <p id="footer-text">Updates and polls Hue Bridge every 10 seconds | Data stored until app shutdown</p>
+  </footer>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
