@@ -18,8 +18,8 @@ class HueDatabase {
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('foreign_keys = ON');
 
-    // Prepare statements for reuse
-    this.prepareStatements();
+    // Prepared statements will be initialized after tables are created
+    this.stmts = null;
   }
 
   initialize() {
@@ -68,6 +68,9 @@ class HueDatabase {
     versionStmt.run('schema_version', '1.0');
 
     console.log('Database initialized successfully');
+
+    // Now that tables exist, prepare statements for reuse
+    this.prepareStatements();
   }
 
   prepareStatements() {
