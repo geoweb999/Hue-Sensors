@@ -1,10 +1,15 @@
 import express from 'express';
+import path from 'path';
 import { config } from './src/config.js';
 import { dataStore } from './src/dataStore.js';
 import { hueClient } from './src/hueClient.js';
 import apiRoutes from './src/api/routes.js';
+import { initializeDatabase } from './src/database.js';
 
 const app = express();
+
+// Database instance
+let database = null;
 
 // Middleware
 app.use(express.json());
@@ -47,29 +52,80 @@ function startPolling() {
   console.log(`Polling started (every ${config.POLL_INTERVAL / 1000} seconds)`);
 }
 
-// Start the server
-app.listen(config.PORT, () => {
-  console.log('='.repeat(50));
-  console.log('Hue Temperature Tracker');
-  console.log('='.repeat(50));
-  console.log(`Server running on http://localhost:${config.PORT}`);
-  console.log(`Bridge IP: ${config.HUE_BRIDGE_IP}`);
-  console.log(`Poll interval: ${config.POLL_INTERVAL / 1000} seconds`);
-  console.log('='.repeat(50));
-  console.log('');
+// Initialize server with database
+async function startServer() {
+  try {
+    console.log('='.repeat(50));
+    console.log('Hue Temperature Tracker');
+    console.log('='.repeat(50));
 
-  startPolling();
-});
+    // 1. Initialize database
+    const dbPath = config.DB_PATH || path.join(process.cwd(), 'data', 'hue-sensors.db');
+    console.log(`Initializing database at: ${dbPath}`);
+    database = initializeDatabase(dbPath);
+
+    // 2. Connect dataStore to database
+    dataStore.setDatabase(database);
+
+    // 3. Load historical data from database
+    console.log('Loading historical data from database...');
+    dataStore.loadFromDatabase();
+
+    // 4. Get and display database statistics
+    const stats = database.getStats();
+    console.log(`Database stats:`);
+    console.log(`  - Total readings: ${stats.totalReadings}`);
+    console.log(`  - Rooms: ${stats.roomCount}`);
+    console.log(`  - Database size: ${stats.dbSizeMB} MB`);
+    if (stats.oldestReading && stats.newestReading) {
+      const oldestDate = new Date(stats.oldestReading);
+      const newestDate = new Date(stats.newestReading);
+      console.log(`  - Data range: ${oldestDate.toLocaleString()} to ${newestDate.toLocaleString()}`);
+    }
+
+    // 5. Start Express server
+    app.listen(config.PORT, () => {
+      console.log('='.repeat(50));
+      console.log(`Server running on http://localhost:${config.PORT}`);
+      console.log(`Bridge IP: ${config.HUE_BRIDGE_IP}`);
+      console.log(`Poll interval: ${config.POLL_INTERVAL / 1000} seconds`);
+      console.log('='.repeat(50));
+      console.log('');
+
+      // 6. Start polling
+      startPolling();
+    });
+
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+// Start the server
+startServer();
 
 // Graceful shutdown
-process.on('SIGINT', () => {
+function shutdown() {
   console.log('\n\nShutting down gracefully...');
-  clearInterval(pollingInterval);
-  process.exit(0);
-});
 
-process.on('SIGTERM', () => {
-  console.log('\n\nShutting down gracefully...');
-  clearInterval(pollingInterval);
+  // Stop polling
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+  }
+
+  // Close database connection
+  if (database) {
+    try {
+      database.close();
+      console.log('Database connection closed');
+    } catch (error) {
+      console.error('Error closing database:', error);
+    }
+  }
+
   process.exit(0);
-});
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

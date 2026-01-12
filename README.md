@@ -11,12 +11,12 @@ This dashboard continuously polls your Philips Hue Bridge to collect environment
 ### Key Features
 
 - **Real-time Monitoring**: Continuously polls Hue Bridge at configurable intervals (default: 10 seconds)
-- **Temperature Tracking**: Displays temperature in Fahrenheit with complete historical data since startup
+- **Temperature Tracking**: Displays temperature in Fahrenheit with complete historical data
 - **Motion Detection**: Visual indicators showing current motion status and when motion was last detected
 - **Light Level Monitoring**: Displays ambient light levels in lux
 - **Interactive Graphs**: Auto-scaling temperature charts with motion events highlighted as green dots
 - **Configurable Settings**: Admin panel to adjust poll rate and y-axis scaling
-- **Persistent Data**: All data stored in memory until application restart
+- **Persistent Data**: All data stored in SQLite database - survives application restarts
 - **Responsive Design**: Works on desktop, tablet, and mobile devices
 
 ## Architecture
@@ -26,7 +26,8 @@ This dashboard continuously polls your Philips Hue Bridge to collect environment
 ```
 src/
 ├── config.js          # Environment configuration and validation
-├── dataStore.js       # In-memory data storage with unlimited history
+├── database.js        # SQLite database operations and persistence
+├── dataStore.js       # In-memory cache + database integration
 ├── hueClient.js       # Philips Hue Bridge API integration
 └── api/
     └── routes.js      # REST API endpoints for frontend
@@ -35,8 +36,9 @@ src/
 **Key Components:**
 
 - **Hue Client**: Connects to Hue Bridge via HTTPS, fetches sensor data, and matches temperature/motion/light sensors from the same physical device
-- **Data Store**: Maintains in-memory storage of all readings with room metadata (temperature, lux, motion status)
-- **API Layer**: Provides REST endpoints for room lists and detailed historical data
+- **Database Layer**: SQLite database with better-sqlite3 for persistent storage of all readings
+- **Data Store**: Maintains in-memory cache of all readings for fast access, writes to database on each poll
+- **API Layer**: Provides REST endpoints for room lists, detailed historical data, and database statistics
 - **Polling Service**: Background service that queries Hue Bridge at configured intervals
 
 ### Frontend (Vanilla HTML/CSS/JavaScript)
@@ -97,6 +99,9 @@ public/
    POLL_INTERVAL=10000
    SERVER_PORT=3000
    NODE_ENV=development
+
+   # Database configuration
+   DB_PATH=./data/hue-sensors.db
    ```
 
 4. **Start the application**
@@ -119,6 +124,7 @@ public/
 | `POLL_INTERVAL` | How often to poll the bridge (milliseconds) | 10000 (10s) |
 | `SERVER_PORT` | Port for the web server | 3000 |
 | `NODE_ENV` | Environment mode | development |
+| `DB_PATH` | Path to SQLite database file | ./data/hue-sensors.db |
 
 ### Runtime Settings
 
@@ -138,6 +144,7 @@ Settings are saved to browser localStorage and persist across sessions.
 | `/api/rooms` | GET | List all rooms with current readings |
 | `/api/rooms/:roomId` | GET | Detailed room data with full history |
 | `/api/health` | GET | Health check and last poll timestamp |
+| `/api/stats` | GET | Database statistics (total readings, size, data range) |
 
 ## Data Flow
 
@@ -157,8 +164,9 @@ Settings are saved to browser localStorage and persist across sessions.
 └─────────────────────────────────────────┘
                   ↓
 ┌─────────────────────────────────────────┐
-│ In-Memory Data Store                    │
-│  └─ All readings since startup          │
+│ Data Store (Dual Layer)                 │
+│  ├─ In-Memory Cache (fast access)       │
+│  └─ SQLite Database (persistence)       │
 └─────────────────────────────────────────┘
                   ↓
 ┌─────────────────────────────────────────┐
@@ -172,6 +180,9 @@ Settings are saved to browser localStorage and persist across sessions.
 │  ├─ Renders temperature graphs          │
 │  └─ Shows motion/lux indicators         │
 └─────────────────────────────────────────┘
+
+On Server Restart:
+SQLite Database → Data Store → Graphs populated with historical data
 ```
 
 ## Temperature Graph Features
@@ -217,12 +228,50 @@ The application includes a `dev` script using Node's `--watch` flag for auto-res
 npm run dev
 ```
 
-### Memory Management
+### Data Persistence & Storage
 
-The application stores all data in memory without limits. For long-running deployments:
-- Monitor memory usage: A typical room generates ~360 readings/hour = ~8.6K readings/day
-- Each reading is ~50 bytes, so 10 rooms running for a week ≈ 30MB
-- Consider implementing data pruning or database persistence for production use
+The application uses a dual-layer storage system:
+
+**In-Memory Cache:**
+- All readings kept in memory for fast access
+- A typical room generates ~360 readings/hour = ~8.6K readings/day
+- Memory usage: ~50 bytes per reading, so 10 rooms for a week ≈ 30MB in RAM
+
+**SQLite Database:**
+- All readings automatically persisted to disk
+- Data survives application restarts
+- Database file grows ~1-2 MB per week for 10 rooms
+- Located at `./data/hue-sensors.db` by default
+- Uses WAL mode for better performance
+
+**Benefits:**
+- Historical data preserved across restarts
+- Fast in-memory access for real-time queries
+- Automatic backup capability (just copy the .db file)
+- Can run indefinitely without data loss
+
+### Database Schema
+
+The SQLite database uses three main tables:
+
+**rooms** - Stores room metadata
+- `room_id` (TEXT, PRIMARY KEY)
+- `room_name` (TEXT)
+- `created_at`, `updated_at` (INTEGER timestamps)
+
+**readings** - Stores all sensor readings
+- `id` (INTEGER, AUTO INCREMENT)
+- `room_id` (TEXT, FOREIGN KEY)
+- `timestamp` (INTEGER)
+- `temperature` (REAL in Celsius)
+- `lux` (INTEGER, light level)
+- `motion_detected` (INTEGER, 0/1 boolean)
+- `last_motion_timestamp` (TEXT)
+- Indexed on `(room_id, timestamp)` for fast queries
+
+**metadata** - Stores application metadata
+- `key` (TEXT, PRIMARY KEY)
+- `value` (TEXT)
 
 ## Troubleshooting
 
@@ -250,12 +299,13 @@ The app converts UTC timestamps from Hue Bridge to local time. If times appear w
 
 ## Future Development Opportunities
 
-### Data Persistence
+### Data Persistence ✅ (Implemented)
 
-- **Database Integration**: Store readings in PostgreSQL, MongoDB, or InfluxDB for long-term analysis
-- **Data Export**: CSV/JSON export functionality for offline analysis
-- **Historical Queries**: Query temperature data by date range
-- **Automatic Backups**: Periodic snapshots of data to prevent loss on restart
+- **SQLite Database**: ✅ All readings persisted to disk, survives restarts
+- **Data Export**: CSV/JSON export functionality for offline analysis (TODO)
+- **Historical Queries**: ✅ Query by date range supported in database layer
+- **Automatic Backups**: Scheduled database backups (TODO)
+- **Advanced Storage**: Migrate to PostgreSQL, MongoDB, or InfluxDB for multi-user deployments (TODO)
 
 ### Advanced Analytics
 

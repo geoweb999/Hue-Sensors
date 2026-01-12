@@ -7,7 +7,8 @@ export const config = {
   HUE_API_TOKEN: process.env.HUE_API_TOKEN,
   POLL_INTERVAL: parseInt(process.env.POLL_INTERVAL) || 60000,
   PORT: parseInt(process.env.SERVER_PORT) || 3000,
-  NODE_ENV: process.env.NODE_ENV || 'development'
+  NODE_ENV: process.env.NODE_ENV || 'development',
+  DB_PATH: process.env.DB_PATH || './data/hue-sensors.db'
 };
 
 // Validate required configuration

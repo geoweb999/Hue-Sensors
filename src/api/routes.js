@@ -1,5 +1,6 @@
 import express from 'express';
 import { dataStore } from '../dataStore.js';
+import { getDatabase } from '../database.js';
 
 const router = express.Router();
 
@@ -54,6 +55,24 @@ router.get('/health', (req, res) => {
     roomCount: dataStore.getAllRooms().length,
     uptime: process.uptime()
   });
+});
+
+// GET /api/stats - Database statistics endpoint
+router.get('/stats', (req, res) => {
+  try {
+    const database = getDatabase();
+    const stats = database.getStats();
+
+    res.json({
+      success: true,
+      stats: stats
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 export default router;
