@@ -15,6 +15,9 @@ This dashboard continuously polls your Philips Hue Bridge to collect environment
 - **Motion Detection**: Visual indicators showing current motion status and when motion was last detected
 - **Light Level Monitoring**: Displays ambient light levels in lux
 - **Interactive Graphs**: Auto-scaling temperature charts with motion events highlighted as green dots
+- **Smart Data Sampling**: Automatic sampling strategies (hourly/15-min/all) optimize performance for large datasets
+- **Time Range Controls**: Quick-select buttons for viewing 30-day, 7-day, 1-day, or auto-selected ranges
+- **Horizontal Scrolling**: Charts expand horizontally for comfortable data viewing with scroll support
 - **Configurable Settings**: Admin panel to adjust poll rate and y-axis scaling
 - **Persistent Data**: All data stored in SQLite database - survives application restarts
 - **Responsive Design**: Works on desktop, tablet, and mobile devices
@@ -57,8 +60,10 @@ public/
 - **Dashboard UI**: Grid layout displaying room cards with current readings
 - **Chart.js Integration**: Line graphs showing temperature over time with motion events
 - **Settings Modal**: Admin interface for configuring poll rate and y-axis scaling
+- **Time Range Controls**: Per-room buttons to select data range (Auto/30d/7d/1d)
+- **Smart Sampling**: Automatic data decimation based on time range for optimal performance
 - **Auto-refresh**: Polls backend API every 10 seconds (or configured interval)
-- **LocalStorage**: Persists user settings across sessions
+- **LocalStorage**: Persists user settings (poll rate, y-axis scaling, time range) across sessions
 
 ## Installation & Setup
 
@@ -128,14 +133,54 @@ public/
 
 ### Runtime Settings
 
-Click the gear icon (⚙️) in the upper right to access:
+**Global Settings** - Click the gear icon (⚙️) in the upper right to access:
 
 - **Poll Rate**: Adjust how frequently the bridge is polled (1-300 seconds)
 - **Y-Axis Scaling**:
   - Auto-scaling: Charts automatically adjust to temperature range
   - Manual: Set fixed upper and lower bounds in °F
 
-Settings are saved to browser localStorage and persist across sessions.
+**Per-Room Time Range Controls** - Buttons on each room card:
+
+- **Auto**: Intelligent sampling based on data age (default)
+  - > 7 days: Shows 30 days, hourly samples
+  - 1-7 days: Shows 7 days, 15-minute samples
+  - < 1 day: Shows all data
+- **30 Days**: Last 30 days with hourly sampling
+- **7 Days**: Last 7 days with 15-minute sampling
+- **1 Day**: Last 24 hours with all data points
+
+All settings are saved to browser localStorage and persist across sessions.
+
+### Time Range Controls & Data Sampling
+
+The dashboard automatically optimizes graph performance when you have accumulated weeks of data:
+
+**How It Works:**
+
+1. **Auto Mode (Default)**: The system analyzes your oldest data point and intelligently chooses the best sampling strategy:
+   - If oldest data is **> 7 days old**: Display last 30 days with 1 reading per hour
+   - If oldest data is **1-7 days old**: Display last 7 days with 1 reading per 15 minutes
+   - If oldest data is **< 1 day old**: Display all available data points
+
+2. **Manual Override**: Use the time range buttons on each room card to manually select:
+   - **30 Days**: Shows last 30 days, sampled hourly (720 data points max)
+   - **7 Days**: Shows last 7 days, sampled every 15 minutes (672 data points max)
+   - **1 Day**: Shows last 24 hours, all data points (~8,640 points max at 10s polling)
+
+3. **Horizontal Scrolling**: Charts automatically expand horizontally (minimum 8 pixels per data point) with native scrollbar support for comfortable navigation through dense datasets.
+
+**Performance Benefits:**
+
+- **Before**: Rendering weeks of data (50,000+ points) caused slow page loads and sluggish interactions
+- **After**: Smart sampling reduces rendering to 500-8,000 points while preserving data trends
+- Graphs load instantly, scroll smoothly, and remain responsive even with months of historical data
+
+**Data Integrity:**
+
+- Sampling only affects visualization - all raw data remains stored in the database
+- You can always view more granular data by selecting a shorter time range
+- Export features (if implemented) will include all unsampled data
 
 ## API Endpoints
 
@@ -187,7 +232,14 @@ SQLite Database → Data Store → Graphs populated with historical data
 
 ## Temperature Graph Features
 
-- **Auto-scaling X-axis**: Displays all data from startup, automatically adjusting time labels
+- **Smart Data Sampling**: Automatic sampling strategies optimize display of large datasets
+  - **Auto mode**: Intelligently selects sampling based on data age
+    - > 7 days of data: Shows 30 days with hourly samples
+    - 1-7 days of data: Shows 7 days with 15-minute samples
+    - < 1 day of data: Shows all data points
+  - **Manual control**: Quick-select buttons for 30-day, 7-day, 1-day, or auto ranges
+- **Horizontal Scrolling**: Charts expand horizontally (8px per data point) with native scrollbar support
+- **Auto-scaling X-axis**: Automatically adjusts time labels based on data range
 - **Smart Time Labels**:
   - < 12 hours: Shows time only (10:30 AM)
   - 12 hours - 3 days: Shows date + time (Jan 10, 10:30 AM)
@@ -195,9 +247,10 @@ SQLite Database → Data Store → Graphs populated with historical data
 - **Motion Indicators**: Green dots on graph when motion was detected during that reading
 - **Adaptive Point Sizes**: Points scale down as data accumulates for better visibility
 - **Performance Optimized**:
+  - Smart sampling reduces rendering load for weeks of data
   - Decimation enabled for datasets > 1000 points
   - Animation disabled for large datasets
-  - Smooth rendering even with days of data
+  - Smooth rendering even with weeks of historical data
 
 ## Development
 
@@ -317,11 +370,13 @@ The app converts UTC timestamps from Hue Bridge to local time. If times appear w
 
 ### Enhanced Visualizations
 
-- **Multiple Chart Types**: Add bar charts, heat maps, or day/night comparison views
-- **Zoom & Pan**: Interactive chart controls for detailed analysis
-- **Annotations**: Add notes/markers for events (e.g., "furnace serviced")
-- **Dashboard Layouts**: Customizable grid layouts, full-screen mode
-- **Dark Mode**: Theme switcher for night viewing
+- **Horizontal Scrolling**: ✅ Charts expand with scrollbar support for viewing large datasets
+- **Time Range Selection**: ✅ Quick-select buttons for different data ranges
+- **Multiple Chart Types**: Add bar charts, heat maps, or day/night comparison views (TODO)
+- **Zoom & Pan**: Interactive chart controls for detailed analysis (TODO)
+- **Annotations**: Add notes/markers for events (e.g., "furnace serviced") (TODO)
+- **Dashboard Layouts**: Customizable grid layouts, full-screen mode (TODO)
+- **Dark Mode**: Theme switcher for night viewing (TODO)
 
 ### Integration & Automation
 
@@ -353,10 +408,13 @@ The app converts UTC timestamps from Hue Bridge to local time. If times appear w
 
 ### Performance & Scalability
 
-- **WebSocket Updates**: Real-time updates without polling frontend
-- **Server-Sent Events**: Push updates to clients efficiently
-- **Clustering**: Horizontal scaling for high-traffic deployments
-- **Caching Layer**: Redis for faster data retrieval
+- **Smart Data Sampling**: ✅ Hourly/15-minute/all sampling based on data age
+- **Time Range Controls**: ✅ Quick-select buttons for different time ranges
+- **Horizontal Scrolling**: ✅ Charts expand for comfortable viewing of large datasets
+- **WebSocket Updates**: Real-time updates without polling frontend (TODO)
+- **Server-Sent Events**: Push updates to clients efficiently (TODO)
+- **Clustering**: Horizontal scaling for high-traffic deployments (TODO)
+- **Caching Layer**: Redis for faster data retrieval (TODO)
 
 ### Developer Tools
 
@@ -386,5 +444,21 @@ MIT License - feel free to use this project for personal or commercial purposes.
 
 ---
 
-**Version**: 1.0.0
-**Last Updated**: January 2026
+**Version**: 1.1.0
+**Last Updated**: February 2026
+
+## Changelog
+
+### Version 1.1.0 (February 2026)
+- Added smart data sampling for optimal performance with large datasets
+- Implemented time range controls (Auto/30d/7d/1d) on room cards
+- Added horizontal scrolling support for charts
+- Improved graph rendering performance for weeks of accumulated data
+- Updated footer to reflect SQLite persistence
+
+### Version 1.0.0 (January 2026)
+- Initial release with SQLite database persistence
+- Real-time temperature, motion, and light monitoring
+- Interactive Chart.js graphs with motion indicators
+- Admin settings modal for poll rate and y-axis configuration
+- Responsive design for desktop, tablet, and mobile

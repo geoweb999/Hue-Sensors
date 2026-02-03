@@ -6,7 +6,8 @@ let settings = {
   pollRate: 10,
   yAxisMode: 'auto',
   yAxisMin: 60,
-  yAxisMax: 80
+  yAxisMax: 80,
+  timeRange: 'auto' // 'auto', '30d', '7d', '1d'
 };
 
 // Update interval (will be updated from settings)
@@ -16,6 +17,94 @@ let updateIntervalId = null;
 // Convert Celsius to Fahrenheit
 function celsiusToFahrenheit(celsius) {
   return (celsius * 9/5) + 32;
+}
+
+// Sample readings by a specific time interval (in milliseconds)
+function sampleByInterval(readings, intervalMs) {
+  if (readings.length === 0) return [];
+
+  const sampled = [];
+  let lastTimestamp = null;
+
+  for (const reading of readings) {
+    if (lastTimestamp === null || reading.timestamp - lastTimestamp >= intervalMs) {
+      sampled.push(reading);
+      lastTimestamp = reading.timestamp;
+    }
+  }
+
+  return sampled;
+}
+
+// Sample readings to one per hour
+function sampleHourly(readings) {
+  return sampleByInterval(readings, 60 * 60 * 1000); // 1 hour in ms
+}
+
+// Sample readings to one per 15 minutes
+function sample15Minutes(readings) {
+  return sampleByInterval(readings, 15 * 60 * 1000); // 15 minutes in ms
+}
+
+// Determine which sampling strategy to use and filter time range
+function getSampledReadings(readings, timeRange) {
+  if (readings.length === 0) return [];
+
+  const now = Date.now();
+  const oldestReading = readings[0];
+  const newestReading = readings[readings.length - 1];
+  const totalDataAge = now - oldestReading.timestamp;
+  const totalDataDays = totalDataAge / (24 * 60 * 60 * 1000);
+
+  let cutoffTime;
+  let samplingStrategy = 'all';
+
+  // Determine cutoff time and sampling based on timeRange setting
+  if (timeRange === 'auto') {
+    // Automatic mode: use smart defaults based on data age
+    if (totalDataDays > 7) {
+      // More than 7 days of data: show 30 days, hourly samples
+      cutoffTime = now - (30 * 24 * 60 * 60 * 1000);
+      samplingStrategy = 'hourly';
+    } else if (totalDataDays > 1) {
+      // 1-7 days of data: show 7 days, 15-minute samples
+      cutoffTime = now - (7 * 24 * 60 * 60 * 1000);
+      samplingStrategy = '15min';
+    } else {
+      // Less than 1 day: show all data
+      cutoffTime = 0;
+      samplingStrategy = 'all';
+    }
+  } else if (timeRange === '30d') {
+    cutoffTime = now - (30 * 24 * 60 * 60 * 1000);
+    samplingStrategy = 'hourly';
+  } else if (timeRange === '7d') {
+    cutoffTime = now - (7 * 24 * 60 * 60 * 1000);
+    samplingStrategy = '15min';
+  } else if (timeRange === '1d') {
+    cutoffTime = now - (24 * 60 * 60 * 1000);
+    samplingStrategy = 'all';
+  }
+
+  // Filter by time range
+  let filtered = readings.filter(r => r.timestamp >= cutoffTime);
+
+  // If no data in range, return last reading
+  if (filtered.length === 0 && readings.length > 0) {
+    filtered = [readings[readings.length - 1]];
+  }
+
+  // Apply sampling strategy
+  let sampled;
+  if (samplingStrategy === 'hourly') {
+    sampled = sampleHourly(filtered);
+  } else if (samplingStrategy === '15min') {
+    sampled = sample15Minutes(filtered);
+  } else {
+    sampled = filtered; // Show all data
+  }
+
+  return sampled;
 }
 
 // Load settings from localStorage
@@ -36,7 +125,7 @@ function saveSettings() {
 function updateFooter() {
   const footerText = document.getElementById('footer-text');
   if (footerText) {
-    footerText.textContent = `Updates and polls Hue Bridge every ${settings.pollRate} seconds | Data stored until app shutdown`;
+    footerText.textContent = `Updates and polls Hue Bridge every ${settings.pollRate} seconds | Data persisted to SQLite database`;
   }
 }
 
@@ -140,6 +229,35 @@ function initSettingsModal() {
   });
 }
 
+// Initialize time range button handlers
+function initTimeRangeHandlers() {
+  // Use event delegation on the rooms container
+  const roomsContainer = document.getElementById('rooms-container');
+
+  roomsContainer.addEventListener('click', (e) => {
+    // Check if clicked element is a time range button
+    if (e.target.classList.contains('time-range-btn')) {
+      const roomId = e.target.dataset.room;
+      const range = e.target.dataset.range;
+
+      // Update active state for buttons in this room
+      const card = document.getElementById(`room-${roomId}`);
+      if (card) {
+        const buttons = card.querySelectorAll('.time-range-btn');
+        buttons.forEach(btn => btn.classList.remove('active'));
+        e.target.classList.add('active');
+      }
+
+      // Update settings
+      settings.timeRange = range;
+      saveSettings();
+
+      // Refresh the chart for this room
+      updateRoomChart(roomId);
+    }
+  });
+}
+
 // Initialize the application
 async function init() {
   console.log('Initializing Hue Temperature Dashboard...');
@@ -152,6 +270,9 @@ async function init() {
 
   // Initialize settings modal
   initSettingsModal();
+
+  // Initialize time range button handlers
+  initTimeRangeHandlers();
 
   // Load initial data
   await fetchAndRenderRooms();
@@ -251,6 +372,12 @@ function createRoomCard(room) {
     <div class="room-meta">
       Last update: ${formatTime(room.lastUpdate)}
     </div>
+    <div class="time-range-selector">
+      <button class="time-range-btn ${settings.timeRange === 'auto' ? 'active' : ''}" data-room="${room.id}" data-range="auto">Auto</button>
+      <button class="time-range-btn ${settings.timeRange === '30d' ? 'active' : ''}" data-room="${room.id}" data-range="30d">30 Days</button>
+      <button class="time-range-btn ${settings.timeRange === '7d' ? 'active' : ''}" data-room="${room.id}" data-range="7d">7 Days</button>
+      <button class="time-range-btn ${settings.timeRange === '1d' ? 'active' : ''}" data-room="${room.id}" data-range="1d">1 Day</button>
+    </div>
     <div class="chart-container">
       <canvas id="chart-${room.id}"></canvas>
     </div>
@@ -309,8 +436,9 @@ async function updateRoomChart(roomId) {
       return;
     }
 
-    // Use all readings since service started
-    const readings = room.readings;
+    // Get sampled readings based on time range setting
+    const allReadings = room.readings;
+    const readings = getSampledReadings(allReadings, settings.timeRange);
 
     if (readings.length === 0) {
       return;
@@ -369,6 +497,15 @@ async function updateRoomChart(roomId) {
     if (charts[roomId]) {
       charts[roomId].destroy();
     }
+
+    // Calculate canvas width for horizontal scrolling
+    // Minimum 8 pixels per data point for comfortable viewing
+    const minWidthPerPoint = 8;
+    const containerWidth = canvas.parentElement.clientWidth;
+    const calculatedWidth = Math.max(containerWidth, dataPointCount * minWidthPerPoint);
+
+    // Set canvas width for horizontal scrolling
+    canvas.style.width = calculatedWidth + 'px';
 
     // Create new chart
     const ctx = canvas.getContext('2d');

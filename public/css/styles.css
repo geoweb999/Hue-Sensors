@@ -212,10 +212,54 @@ main {
   margin-bottom: 1rem;
 }
 
+.time-range-selector {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  flex-wrap: wrap;
+}
+
+.time-range-btn {
+  flex: 1;
+  min-width: 60px;
+  padding: 0.5rem 0.75rem;
+  background: #f5f5f5;
+  border: 2px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.time-range-btn:hover {
+  background: #e8e8e8;
+  border-color: #667eea;
+  color: #667eea;
+}
+
+.time-range-btn.active {
+  background: #667eea;
+  border-color: #667eea;
+  color: white;
+  font-weight: 600;
+}
+
+.time-range-btn:active {
+  transform: scale(0.95);
+}
+
 .chart-container {
   position: relative;
   height: 200px;
   margin-top: 1rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chart-container canvas {
+  min-width: 100%;
 }
 
 .chart-placeholder {
