@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hue Lights Dashboard</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header>
+    <div class="header-content">
+      <h1>Hue Dashboard</h1>
+      <nav class="main-nav">
+        <a href="/" class="nav-link">Temperature</a>
+        <a href="/lights.html" class="nav-link active">Lights</a>
+      </nav>
+    </div>
+    <div class="status-bar">
+      <div id="status-indicator" class="status-indicator">
+        <span class="status-dot"></span>
+        <span id="status-text">Connecting...</span>
+      </div>
+      <div id="last-update">Last update: --</div>
+    </div>
+  </header>
+
+  <main>
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Loading light data...</p>
+    </div>
+
+    <div id="error" class="error hidden">
+      <p id="error-message"></p>
+    </div>
+
+    <div id="rooms-container" class="rooms-container">
+      <!-- Room cards will be dynamically inserted here -->
+    </div>
+
+    <div id="no-data" class="no-data hidden">
+      <p>No lights found. Make sure your Hue Bridge has lights and they are accessible.</p>
+    </div>
+  </main>
+
+  <footer>
+    <p>Light status refreshes every 5 seconds</p>
+  </footer>
+
+  <script src="/js/lights.js"></script>
+</body>
+</html>

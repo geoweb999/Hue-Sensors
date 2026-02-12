@@ -1,10 +1,14 @@
 import express from 'express';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { config } from './src/config.js';
 import { dataStore } from './src/dataStore.js';
 import { hueClient } from './src/hueClient.js';
 import apiRoutes from './src/api/routes.js';
 import { initializeDatabase } from './src/database.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 
@@ -13,7 +17,7 @@ let database = null;
 
 // Middleware
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // API Routes
 app.use('/api', apiRoutes);
