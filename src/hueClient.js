@@ -7,12 +7,12 @@ class HueClient {
     this.apiToken = config.HUE_API_TOKEN;
   }
 
-  async getSensors() {
+  _request(path) {
     return new Promise((resolve, reject) => {
       const options = {
         hostname: this.bridgeIp,
         port: 443,
-        path: `/api/${this.apiToken}/sensors`,
+        path,
         method: 'GET',
         rejectUnauthorized: false // Hue Bridge uses self-signed cert
       };
@@ -40,6 +40,18 @@ class HueClient {
 
       req.end();
     });
+  }
+
+  async getSensors() {
+    return this._request(`/api/${this.apiToken}/sensors`);
+  }
+
+  async getLights() {
+    return this._request(`/api/${this.apiToken}/lights`);
+  }
+
+  async getGroups() {
+    return this._request(`/api/${this.apiToken}/groups`);
   }
 
   async getRoomData() {

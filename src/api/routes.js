@@ -1,6 +1,7 @@
 import express from 'express';
 import { dataStore } from '../dataStore.js';
 import { getDatabase } from '../database.js';
+import { hueClient } from '../hueClient.js';
 
 const router = express.Router();
 
@@ -72,6 +73,88 @@ router.get('/stats', (req, res) => {
       success: false,
       error: error.message
     });
+  }
+});
+
+// GET /api/lights - Get all lights grouped by room
+router.get('/lights', async (req, res) => {
+  try {
+    const [lightsData, groupsData] = await Promise.all([
+      hueClient.getLights(),
+      hueClient.getGroups()
+    ]);
+
+    // Build lights lookup
+    const lights = {};
+    for (const [id, light] of Object.entries(lightsData)) {
+      lights[id] = { id, ...light };
+    }
+
+    // Build rooms from groups (only type "Room")
+    const rooms = [];
+    for (const [groupId, group] of Object.entries(groupsData)) {
+      if (group.type === 'Room') {
+        const roomLights = (group.lights || []).map(lightId => {
+          const light = lights[lightId];
+          if (!light) return null;
+          return {
+            id: lightId,
+            name: light.name,
+            type: light.type,
+            modelid: light.modelid,
+            on: light.state?.on || false,
+            reachable: light.state?.reachable || false,
+            brightness: light.state?.bri || 0,
+            colormode: light.state?.colormode || null,
+            hue: light.state?.hue,
+            sat: light.state?.sat,
+            xy: light.state?.xy,
+            ct: light.state?.ct
+          };
+        }).filter(Boolean);
+
+        rooms.push({
+          id: groupId,
+          name: group.name,
+          allOn: group.state?.all_on || false,
+          anyOn: group.state?.any_on || false,
+          lights: roomLights
+        });
+      }
+    }
+
+    // Collect ungrouped lights
+    const groupedLightIds = new Set(rooms.flatMap(r => r.lights.map(l => l.id)));
+    const ungroupedLights = Object.values(lights)
+      .filter(l => !groupedLightIds.has(l.id))
+      .map(light => ({
+        id: light.id,
+        name: light.name,
+        type: light.type,
+        modelid: light.modelid,
+        on: light.state?.on || false,
+        reachable: light.state?.reachable || false,
+        brightness: light.state?.bri || 0,
+        colormode: light.state?.colormode || null,
+        hue: light.state?.hue,
+        sat: light.state?.sat,
+        xy: light.state?.xy,
+        ct: light.state?.ct
+      }));
+
+    if (ungroupedLights.length > 0) {
+      rooms.push({
+        id: 'ungrouped',
+        name: 'Other Lights',
+        allOn: ungroupedLights.every(l => l.on),
+        anyOn: ungroupedLights.some(l => l.on),
+        lights: ungroupedLights
+      });
+    }
+
+    res.json({ success: true, rooms });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

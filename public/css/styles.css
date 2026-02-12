@@ -488,6 +488,114 @@ footer {
   transform: scale(0.98);
 }
 
+/* Navigation */
+.main-nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nav-link {
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 500;
+  color: #666;
+  transition: all 0.2s;
+}
+
+.nav-link:hover {
+  background: rgba(102, 126, 234, 0.1);
+  color: #667eea;
+}
+
+.nav-link.active {
+  background: #667eea;
+  color: white;
+}
+
+/* Lights Page */
+.room-light-count {
+  font-size: 0.9rem;
+  color: #999;
+  font-weight: 500;
+}
+
+.lights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.light-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  background: #f5f5f5;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.light-item.light-on {
+  background: #f0f4ff;
+  border: 1px solid rgba(102, 126, 234, 0.2);
+}
+
+.light-item.light-off {
+  opacity: 0.6;
+  border: 1px solid transparent;
+}
+
+.light-item.light-unreachable {
+  opacity: 0.4;
+}
+
+.light-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.1);
+}
+
+.light-item.light-on .light-swatch {
+  box-shadow: 0 0 12px 2px var(--swatch-color, rgba(255, 200, 100, 0.5));
+}
+
+.light-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.light-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.light-brightness {
+  font-size: 0.8rem;
+  color: #999;
+}
+
+.light-unreachable-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 0.65rem;
+  background: #f44336;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
 @media (max-width: 768px) {
   .rooms-container {
     grid-template-columns: 1fr;
@@ -523,5 +631,16 @@ footer {
 
   .modal-footer {
     flex-direction: column;
+  }
+
+  .main-nav {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+    margin-top: 0.5rem;
+  }
+
+  .lights-grid {
+    grid-template-columns: 1fr;
   }
 }
