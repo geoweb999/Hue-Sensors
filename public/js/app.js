@@ -1,13 +1,16 @@
 // Chart instances storage
 const charts = {};
 
+// Per-room time range overrides (roomId -> range string)
+const roomTimeRanges = {};
+
 // Settings with defaults
 let settings = {
   pollRate: 10,
   yAxisMode: 'auto',
   yAxisMin: 60,
   yAxisMax: 80,
-  timeRange: 'auto' // 'auto', '30d', '7d', '1d'
+  timeRange: 'auto' // 'auto', '30d', '7d', '1d' — default for new rooms
 };
 
 // Update interval (will be updated from settings)
@@ -84,6 +87,9 @@ function getSampledReadings(readings, timeRange) {
   } else if (timeRange === '1d') {
     cutoffTime = now - (24 * 60 * 60 * 1000);
     samplingStrategy = 'all';
+  } else if (timeRange === '1h') {
+    cutoffTime = now - (60 * 60 * 1000);
+    samplingStrategy = 'all';
   }
 
   // Filter by time range
@@ -125,7 +131,7 @@ function saveSettings() {
 function updateFooter() {
   const footerText = document.getElementById('footer-text');
   if (footerText) {
-    footerText.textContent = `Updates and polls Hue Bridge every ${settings.pollRate} seconds | Data persisted to SQLite database`;
+    footerText.textContent = `Updates and polls Hue Bridge every ${settings.pollRate} seconds | Data persisted to SQLite database | v1.2`;
   }
 }
 
@@ -240,7 +246,7 @@ function initTimeRangeHandlers() {
       const roomId = e.target.dataset.room;
       const range = e.target.dataset.range;
 
-      // Update active state for buttons in this room
+      // Update active state for buttons in this room only
       const card = document.getElementById(`room-${roomId}`);
       if (card) {
         const buttons = card.querySelectorAll('.time-range-btn');
@@ -248,11 +254,10 @@ function initTimeRangeHandlers() {
         e.target.classList.add('active');
       }
 
-      // Update settings
-      settings.timeRange = range;
-      saveSettings();
+      // Update per-room time range
+      roomTimeRanges[roomId] = range;
 
-      // Refresh the chart for this room
+      // Refresh the chart for this room only
       updateRoomChart(roomId);
     }
   });
@@ -373,10 +378,11 @@ function createRoomCard(room) {
       Last update: ${formatTime(room.lastUpdate)}
     </div>
     <div class="time-range-selector">
-      <button class="time-range-btn ${settings.timeRange === 'auto' ? 'active' : ''}" data-room="${room.id}" data-range="auto">Auto</button>
-      <button class="time-range-btn ${settings.timeRange === '30d' ? 'active' : ''}" data-room="${room.id}" data-range="30d">30 Days</button>
-      <button class="time-range-btn ${settings.timeRange === '7d' ? 'active' : ''}" data-room="${room.id}" data-range="7d">7 Days</button>
-      <button class="time-range-btn ${settings.timeRange === '1d' ? 'active' : ''}" data-room="${room.id}" data-range="1d">1 Day</button>
+      <button class="time-range-btn ${(roomTimeRanges[room.id] || settings.timeRange) === 'auto' ? 'active' : ''}" data-room="${room.id}" data-range="auto">Auto</button>
+      <button class="time-range-btn ${(roomTimeRanges[room.id] || settings.timeRange) === '30d' ? 'active' : ''}" data-room="${room.id}" data-range="30d">30 Days</button>
+      <button class="time-range-btn ${(roomTimeRanges[room.id] || settings.timeRange) === '7d' ? 'active' : ''}" data-room="${room.id}" data-range="7d">7 Days</button>
+      <button class="time-range-btn ${(roomTimeRanges[room.id] || settings.timeRange) === '1d' ? 'active' : ''}" data-room="${room.id}" data-range="1d">1 Day</button>
+      <button class="time-range-btn ${(roomTimeRanges[room.id] || settings.timeRange) === '1h' ? 'active' : ''}" data-room="${room.id}" data-range="1h">1 Hour</button>
     </div>
     <div class="chart-container">
       <canvas id="chart-${room.id}"></canvas>
@@ -436,9 +442,10 @@ async function updateRoomChart(roomId) {
       return;
     }
 
-    // Get sampled readings based on time range setting
+    // Get sampled readings based on per-room time range (fallback to global default)
     const allReadings = room.readings;
-    const readings = getSampledReadings(allReadings, settings.timeRange);
+    const timeRange = roomTimeRanges[roomId] || settings.timeRange;
+    const readings = getSampledReadings(allReadings, timeRange);
 
     if (readings.length === 0) {
       return;
