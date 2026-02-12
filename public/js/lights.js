@@ -3,6 +3,9 @@
 
 const REFRESH_INTERVAL = 5000;
 let refreshIntervalId = null;
+const lightDataMap = new Map();
+let currentLightId = null;
+let sendTimeout = null;
 
 // ── Color Conversion ─────────────────────────────────────────────
 
@@ -75,6 +78,41 @@ function hueSatToCss(hue, sat, bri) {
   const s = Math.round((sat / 254) * 100);
   const l = Math.round((bri / 254) * 50);
   return `hsl(${h}, ${s}%, ${Math.max(l, 10)}%)`;
+}
+
+// RGB (0-255) → CIE xy (inverse of xyBriToRgb, Wide RGB D65)
+function rgbToXy(r, g, b) {
+  let red = r / 255;
+  let green = g / 255;
+  let blue = b / 255;
+
+  // Apply sRGB gamma correction
+  red = red > 0.04045 ? Math.pow((red + 0.055) / 1.055, 2.4) : red / 12.92;
+  green = green > 0.04045 ? Math.pow((green + 0.055) / 1.055, 2.4) : green / 12.92;
+  blue = blue > 0.04045 ? Math.pow((blue + 0.055) / 1.055, 2.4) : blue / 12.92;
+
+  // Inverse Wide RGB D65 matrix
+  const X = red * 0.664511 + green * 0.154324 + blue * 0.162028;
+  const Y = red * 0.283881 + green * 0.668433 + blue * 0.047685;
+  const Z = red * 0.000088 + green * 0.072310 + blue * 0.986039;
+
+  const sum = X + Y + Z;
+  if (sum === 0) return [0.3127, 0.3290]; // D65 white point
+
+  return [X / sum, Y / sum];
+}
+
+// Hex color → {r, g, b}
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result
+    ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) }
+    : { r: 255, g: 255, b: 255 };
+}
+
+// {r, g, b} → hex string
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
 }
 
 // Unified: pick the right converter based on colormode
@@ -156,13 +194,15 @@ function showNoData() {
 // ── Rendering ────────────────────────────────────────────────────
 
 function renderLight(light) {
+  lightDataMap.set(light.id, light);
+
   const color = getLightCssColor(light);
   const brightnessPercent = Math.round((light.brightness / 254) * 100);
   const statusClass = light.on ? 'light-on' : 'light-off';
   const reachableClass = light.reachable ? '' : 'light-unreachable';
 
   return `
-    <div class="light-item ${statusClass} ${reachableClass}">
+    <div class="light-item ${statusClass} ${reachableClass}" data-light-id="${light.id}">
       <div class="light-swatch" style="background: ${color}; --swatch-color: ${color};"></div>
       <div class="light-info">
         <span class="light-name">${escapeHtml(light.name)}</span>
@@ -246,9 +286,216 @@ async function fetchAndRenderLights() {
   }
 }
 
+// ── Light Control Modal ──────────────────────────────────────────
+
+function isFullColorLight(type) {
+  return type === 'Extended color light' || type === 'Color light';
+}
+
+function isCTLight(type) {
+  return type === 'Color temperature light';
+}
+
+function openLightModal(light) {
+  currentLightId = light.id;
+
+  const modal = document.getElementById('light-control-modal');
+
+  // Title
+  document.getElementById('light-modal-title').textContent = light.name;
+
+  // Power
+  const powerToggle = document.getElementById('light-power-toggle');
+  powerToggle.checked = light.on;
+  document.getElementById('light-power-label').textContent = light.on ? 'On' : 'Off';
+
+  // Brightness
+  const brightnessSlider = document.getElementById('light-brightness-slider');
+  brightnessSlider.value = light.brightness || 127;
+  document.getElementById('brightness-value').textContent =
+    Math.round(((light.brightness || 127) / 254) * 100) + '%';
+
+  // Determine capabilities
+  const fullColor = isFullColorLight(light.type);
+  const ctOnly = isCTLight(light.type);
+
+  // Show/hide controls
+  document.getElementById('color-group').style.display = fullColor ? 'block' : 'none';
+  document.getElementById('ct-group').style.display = (fullColor || ctOnly) ? 'block' : 'none';
+
+  // Populate color picker
+  if (fullColor && light.xy && light.xy.length === 2) {
+    const rgb = xyBriToRgb(light.xy[0], light.xy[1], 254);
+    document.getElementById('light-color-picker').value = rgbToHex(rgb.r, rgb.g, rgb.b);
+  }
+
+  // Populate CT slider
+  if ((fullColor || ctOnly) && light.ct) {
+    document.getElementById('light-ct-slider').value = light.ct;
+    document.getElementById('ct-value').textContent = Math.round(1000000 / light.ct) + 'K';
+  }
+
+  // Enable/disable controls based on power
+  toggleControlsEnabled(light.on);
+  updatePreviewSwatch();
+
+  modal.classList.add('active');
+}
+
+function closeModal() {
+  document.getElementById('light-control-modal').classList.remove('active');
+  currentLightId = null;
+  if (sendTimeout) clearTimeout(sendTimeout);
+}
+
+function toggleControlsEnabled(isOn) {
+  const groups = ['brightness-group', 'color-group', 'ct-group'];
+  for (const id of groups) {
+    const el = document.getElementById(id);
+    if (isOn) {
+      el.classList.remove('light-controls-disabled');
+    } else {
+      el.classList.add('light-controls-disabled');
+    }
+  }
+}
+
+function updatePreviewSwatch() {
+  const swatch = document.getElementById('light-preview-swatch');
+  const isOn = document.getElementById('light-power-toggle').checked;
+
+  if (!isOn) {
+    swatch.style.backgroundColor = '#555';
+    swatch.style.boxShadow = '0 0 20px rgba(0, 0, 0, 0.15)';
+    return;
+  }
+
+  const bri = parseInt(document.getElementById('light-brightness-slider').value);
+  const colorGroup = document.getElementById('color-group');
+  const ctGroup = document.getElementById('ct-group');
+  const scale = bri / 254;
+
+  let color;
+  if (colorGroup.style.display !== 'none') {
+    const hex = document.getElementById('light-color-picker').value;
+    const rgb = hexToRgb(hex);
+    color = `rgb(${Math.round(rgb.r * scale)}, ${Math.round(rgb.g * scale)}, ${Math.round(rgb.b * scale)})`;
+  } else if (ctGroup.style.display !== 'none') {
+    const ct = parseInt(document.getElementById('light-ct-slider').value);
+    const rgb = ctToRgb(ct);
+    color = `rgb(${Math.round(rgb.r * scale)}, ${Math.round(rgb.g * scale)}, ${Math.round(rgb.b * scale)})`;
+  } else {
+    color = `rgb(255, ${Math.round(200 + scale * 55)}, ${Math.round(150 + scale * 105)})`;
+  }
+
+  swatch.style.backgroundColor = color;
+  swatch.style.boxShadow = `0 0 20px 5px ${color}`;
+}
+
+function debouncedSend(stateObj) {
+  if (sendTimeout) clearTimeout(sendTimeout);
+  sendTimeout = setTimeout(() => sendLightState(stateObj), 100);
+}
+
+async function sendLightState(stateObj) {
+  if (!currentLightId) return;
+
+  try {
+    const response = await fetch(`/api/lights/${currentLightId}/state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(stateObj)
+    });
+    const data = await response.json();
+
+    if (!data.success) {
+      console.error('Failed to set light state:', data.error || data.errors);
+    }
+
+    // Update local data so preview stays consistent
+    const light = lightDataMap.get(currentLightId);
+    if (light) {
+      if (stateObj.on !== undefined) light.on = stateObj.on;
+      if (stateObj.bri !== undefined) light.brightness = stateObj.bri;
+      if (stateObj.xy !== undefined) light.xy = stateObj.xy;
+      if (stateObj.ct !== undefined) light.ct = stateObj.ct;
+      if (stateObj.hue !== undefined) light.hue = stateObj.hue;
+      if (stateObj.sat !== undefined) light.sat = stateObj.sat;
+    }
+  } catch (error) {
+    console.error('Error sending light state:', error);
+  }
+}
+
+function initLightControlModal() {
+  const modal = document.getElementById('light-control-modal');
+  const closeBtnEl = modal.querySelector('.close-btn');
+  const powerToggle = document.getElementById('light-power-toggle');
+  const brightnessSlider = document.getElementById('light-brightness-slider');
+  const colorPicker = document.getElementById('light-color-picker');
+  const ctSlider = document.getElementById('light-ct-slider');
+
+  // Close handlers
+  closeBtnEl.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) closeModal();
+  });
+
+  // Click on light item opens modal
+  document.getElementById('rooms-container').addEventListener('click', (e) => {
+    const lightItem = e.target.closest('.light-item');
+    if (!lightItem) return;
+
+    const lightId = lightItem.dataset.lightId;
+    const light = lightDataMap.get(lightId);
+    if (!light || !light.reachable) return;
+
+    openLightModal(light);
+  });
+
+  // Power toggle
+  powerToggle.addEventListener('change', () => {
+    const isOn = powerToggle.checked;
+    document.getElementById('light-power-label').textContent = isOn ? 'On' : 'Off';
+    toggleControlsEnabled(isOn);
+    updatePreviewSwatch();
+    sendLightState({ on: isOn });
+  });
+
+  // Brightness slider
+  brightnessSlider.addEventListener('input', () => {
+    const bri = parseInt(brightnessSlider.value);
+    document.getElementById('brightness-value').textContent =
+      Math.round((bri / 254) * 100) + '%';
+    updatePreviewSwatch();
+    debouncedSend({ bri });
+  });
+
+  // Color picker
+  colorPicker.addEventListener('input', () => {
+    const hex = colorPicker.value;
+    const rgb = hexToRgb(hex);
+    const xy = rgbToXy(rgb.r, rgb.g, rgb.b);
+    updatePreviewSwatch();
+    debouncedSend({ xy });
+  });
+
+  // CT slider
+  ctSlider.addEventListener('input', () => {
+    const ct = parseInt(ctSlider.value);
+    document.getElementById('ct-value').textContent = Math.round(1000000 / ct) + 'K';
+    updatePreviewSwatch();
+    debouncedSend({ ct });
+  });
+}
+
 // ── Init ─────────────────────────────────────────────────────────
 
 async function init() {
+  initLightControlModal();
   await fetchAndRenderLights();
   refreshIntervalId = setInterval(fetchAndRenderLights, REFRESH_INTERVAL);
 }

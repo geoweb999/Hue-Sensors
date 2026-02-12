@@ -158,4 +158,36 @@ router.get('/lights', async (req, res) => {
   }
 });
 
+// PUT /api/lights/:id/state - Set light state on the bridge
+router.put('/lights/:id/state', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const stateObj = req.body;
+
+    // Only allow known Hue state keys
+    const allowedKeys = ['on', 'bri', 'hue', 'sat', 'xy', 'ct', 'effect', 'alert', 'transitiontime'];
+    const filtered = {};
+    for (const key of Object.keys(stateObj)) {
+      if (allowedKeys.includes(key)) {
+        filtered[key] = stateObj[key];
+      }
+    }
+
+    if (Object.keys(filtered).length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid state properties provided' });
+    }
+
+    const result = await hueClient.setLightState(id, filtered);
+
+    const errors = (Array.isArray(result) ? result : []).filter(r => r.error);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors: errors.map(e => e.error) });
+    }
+
+    res.json({ success: true, result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 export default router;

@@ -596,6 +596,124 @@ footer {
   border-radius: 4px;
 }
 
+/* Light Control Modal */
+.light-item {
+  cursor: pointer;
+}
+
+.light-item:hover {
+  transform: scale(1.02);
+}
+
+.light-preview-swatch {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  margin: 0 auto 1rem;
+  border: 3px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.toggle-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  font-weight: normal;
+}
+
+.toggle-switch input {
+  display: none;
+}
+
+.toggle-slider {
+  width: 48px;
+  height: 26px;
+  background: #ccc;
+  border-radius: 13px;
+  position: relative;
+  transition: background-color 0.3s;
+  flex-shrink: 0;
+}
+
+.toggle-slider::after {
+  content: '';
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: white;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.3s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: #667eea;
+}
+
+.toggle-switch input:checked + .toggle-slider::after {
+  transform: translateX(22px);
+}
+
+.toggle-label {
+  font-weight: 600;
+  color: #333;
+}
+
+.setting-group input[type="range"] {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #e0e0e0;
+  border-radius: 3px;
+  outline: none;
+}
+
+.setting-group input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #667eea;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.4);
+}
+
+.ct-slider-container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ct-slider-container input[type="range"] {
+  flex: 1;
+}
+
+.ct-label-cool,
+.ct-label-warm {
+  font-size: 0.8rem;
+  color: #999;
+  white-space: nowrap;
+}
+
+.setting-group input[type="color"] {
+  width: 100%;
+  height: 44px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.light-controls-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 @media (max-width: 768px) {
   .rooms-container {
     grid-template-columns: 1fr;

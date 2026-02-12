@@ -7,15 +7,19 @@ class HueClient {
     this.apiToken = config.HUE_API_TOKEN;
   }
 
-  _request(path) {
+  _request(path, method = 'GET', body = null) {
     return new Promise((resolve, reject) => {
       const options = {
         hostname: this.bridgeIp,
         port: 443,
         path,
-        method: 'GET',
+        method,
         rejectUnauthorized: false // Hue Bridge uses self-signed cert
       };
+
+      if (body) {
+        options.headers = { 'Content-Type': 'application/json' };
+      }
 
       const req = https.request(options, (res) => {
         let data = '';
@@ -38,6 +42,9 @@ class HueClient {
         reject(new Error(`Failed to connect to Hue Bridge: ${error.message}`));
       });
 
+      if (body) {
+        req.write(JSON.stringify(body));
+      }
       req.end();
     });
   }
@@ -52,6 +59,14 @@ class HueClient {
 
   async getGroups() {
     return this._request(`/api/${this.apiToken}/groups`);
+  }
+
+  async setLightState(lightId, stateObj) {
+    return this._request(
+      `/api/${this.apiToken}/lights/${lightId}/state`,
+      'PUT',
+      stateObj
+    );
   }
 
   async getRoomData() {
