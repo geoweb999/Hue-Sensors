@@ -714,6 +714,287 @@ footer {
   pointer-events: none;
 }
 
+/* Theme Toggle Button */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.theme-toggle-btn {
+  background: #f0f0f0;
+  border: 2px solid #ccc;
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  color: #555;
+}
+
+.theme-toggle-btn:hover {
+  border-color: #667eea;
+  color: #667eea;
+}
+
+.theme-toggle-btn .icon-moon {
+  display: none;
+}
+
+[data-theme="dark"] .theme-toggle-btn .icon-sun {
+  display: none;
+}
+
+[data-theme="dark"] .theme-toggle-btn .icon-moon {
+  display: block;
+}
+
+/* Dark Mode */
+[data-theme="dark"] body,
+body[data-theme="dark"] {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] header {
+  background: rgba(30, 30, 50, 0.95);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] header h1 {
+  color: #8b9cf7;
+}
+
+[data-theme="dark"] .status-bar {
+  color: #999;
+}
+
+[data-theme="dark"] .settings-btn {
+  background: #4a5bc7;
+  box-shadow: 0 2px 8px rgba(74, 91, 199, 0.3);
+}
+
+[data-theme="dark"] .settings-btn:hover {
+  background: #5568d3;
+}
+
+[data-theme="dark"] .theme-toggle-btn {
+  border-color: #444;
+  color: #ccc;
+}
+
+[data-theme="dark"] .theme-toggle-btn:hover {
+  border-color: #8b9cf7;
+  color: #8b9cf7;
+}
+
+[data-theme="dark"] .room-card {
+  background: rgba(30, 30, 50, 0.95);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .room-card:hover {
+  box-shadow: 0 8px 12px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .room-name {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .room-temp {
+  color: #8b9cf7;
+}
+
+[data-theme="dark"] .temp-unit {
+  color: #777;
+}
+
+[data-theme="dark"] .room-sensors {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .sensor-label {
+  color: #999;
+}
+
+[data-theme="dark"] .sensor-value {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .room-meta {
+  color: #777;
+}
+
+[data-theme="dark"] .time-range-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: #444;
+  color: #999;
+}
+
+[data-theme="dark"] .time-range-btn:hover {
+  background: rgba(102, 126, 234, 0.15);
+  border-color: #667eea;
+  color: #8b9cf7;
+}
+
+[data-theme="dark"] .time-range-btn.active {
+  background: #4a5bc7;
+  border-color: #4a5bc7;
+  color: white;
+}
+
+[data-theme="dark"] .no-data {
+  background: rgba(30, 30, 50, 0.9);
+  color: #999;
+}
+
+[data-theme="dark"] .error {
+  background: #3d1111;
+  color: #ff8a80;
+}
+
+[data-theme="dark"] .loading {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+[data-theme="dark"] footer {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Dark mode - Nav */
+[data-theme="dark"] .nav-link {
+  color: #999;
+}
+
+[data-theme="dark"] .nav-link:hover {
+  background: rgba(102, 126, 234, 0.15);
+  color: #8b9cf7;
+}
+
+[data-theme="dark"] .nav-link.active {
+  background: #4a5bc7;
+  color: white;
+}
+
+/* Dark mode - Modals */
+[data-theme="dark"] .modal-content {
+  background: #1e1e32;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="dark"] .modal-header {
+  border-bottom-color: #333;
+}
+
+[data-theme="dark"] .modal-header h2 {
+  color: #8b9cf7;
+}
+
+[data-theme="dark"] .close-btn {
+  color: #777;
+}
+
+[data-theme="dark"] .close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .modal-footer {
+  border-top-color: #333;
+}
+
+[data-theme="dark"] .setting-group label {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .setting-group input[type="number"] {
+  background: #2a2a44;
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .setting-group input[type="number"]:focus {
+  border-color: #667eea;
+}
+
+[data-theme="dark"] .setting-description {
+  color: #777;
+}
+
+[data-theme="dark"] .radio-label {
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .radio-label:hover {
+  border-color: #667eea;
+  background: rgba(102, 126, 234, 0.1);
+}
+
+[data-theme="dark"] .manual-bounds {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .btn-secondary {
+  background: #333;
+  color: #ccc;
+}
+
+[data-theme="dark"] .btn-secondary:hover {
+  background: #444;
+}
+
+/* Dark mode - Lights page */
+[data-theme="dark"] .light-item {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .light-item.light-on {
+  background: rgba(102, 126, 234, 0.1);
+  border-color: rgba(102, 126, 234, 0.3);
+}
+
+[data-theme="dark"] .light-item.light-off {
+  border-color: transparent;
+}
+
+[data-theme="dark"] .light-name {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .light-brightness {
+  color: #777;
+}
+
+[data-theme="dark"] .light-preview-swatch {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+[data-theme="dark"] .toggle-label {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .toggle-slider {
+  background: #444;
+}
+
+[data-theme="dark"] .setting-group input[type="range"] {
+  background: #444;
+}
+
+[data-theme="dark"] .setting-group input[type="color"] {
+  border-color: #444;
+  background: #2a2a44;
+}
+
+[data-theme="dark"] .ct-label-cool,
+[data-theme="dark"] .ct-label-warm {
+  color: #777;
+}
+
 @media (max-width: 768px) {
   .rooms-container {
     grid-template-columns: 1fr;
