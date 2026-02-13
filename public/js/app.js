@@ -506,23 +506,25 @@ async function updateRoomChart(roomId) {
     }
 
     // Calculate canvas width for horizontal scrolling (desktop only)
-    const containerWidth = canvas.parentElement.clientWidth;
     const isMobile = window.innerWidth <= 768;
+    let activeCanvas = canvas;
 
     if (isMobile) {
-      // On mobile, remove any inline width so CSS controls sizing
-      canvas.style.removeProperty('width');
-      canvas.removeAttribute('width');
-      canvas.removeAttribute('height');
+      // On mobile, replace canvas with a fresh one to avoid stale size attributes
+      const freshCanvas = document.createElement('canvas');
+      freshCanvas.id = canvas.id;
+      canvas.parentElement.replaceChild(freshCanvas, canvas);
+      activeCanvas = freshCanvas;
     } else {
       // On desktop, allow horizontal scrolling for dense data
+      const containerWidth = canvas.parentElement.clientWidth;
       const minWidthPerPoint = 8;
       const calculatedWidth = Math.max(containerWidth, dataPointCount * minWidthPerPoint);
       canvas.style.width = calculatedWidth + 'px';
     }
 
     // Create new chart
-    const ctx = canvas.getContext('2d');
+    const ctx = activeCanvas.getContext('2d');
     charts[roomId] = new Chart(ctx, {
       type: 'line',
       data: {
