@@ -1002,6 +1002,10 @@ body[data-theme="dark"] {
     overflow-x: hidden;
   }
 
+  header {
+    padding: 1rem;
+  }
+
   main {
     padding: 0 1rem;
   }
@@ -1042,11 +1046,38 @@ body[data-theme="dark"] {
     flex-direction: column;
   }
 
+  .header-content {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  header h1 {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .header-actions {
+    order: 2;
+    flex-shrink: 0;
+  }
+
   .main-nav {
     order: 3;
     width: 100%;
     justify-content: center;
-    margin-top: 0.5rem;
+    margin-top: 0.25rem;
+  }
+
+  .theme-toggle-btn,
+  .settings-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .time-range-btn {
+    padding: 0.4rem 0.5rem;
+    font-size: 0.75rem;
+    min-width: 0;
   }
 
   .lights-grid {
