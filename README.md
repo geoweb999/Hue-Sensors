@@ -14,13 +14,15 @@ This dashboard continuously polls your Philips Hue Bridge to collect environment
 - **Temperature Tracking**: Displays temperature in Fahrenheit with complete historical data
 - **Motion Detection**: Visual indicators showing current motion status and when motion was last detected
 - **Light Level Monitoring**: Displays ambient light levels in lux
+- **Lights Dashboard**: View and control all Hue lights — toggle power, adjust brightness, pick colors, and set color temperature
 - **Interactive Graphs**: Auto-scaling temperature charts with motion events highlighted as green dots
 - **Smart Data Sampling**: Automatic sampling strategies (hourly/15-min/all) optimize performance for large datasets
-- **Time Range Controls**: Quick-select buttons for viewing 30-day, 7-day, 1-day, or auto-selected ranges
+- **Time Range Controls**: Quick-select buttons for viewing 1-hour, 1-day, 7-day, 30-day, or auto-selected ranges
 - **Horizontal Scrolling**: Charts expand horizontally for comfortable data viewing with scroll support
+- **Dark Mode**: Light/dark theme toggle with persistent preference across pages
 - **Configurable Settings**: Admin panel to adjust poll rate and y-axis scaling
 - **Persistent Data**: All data stored in SQLite database - survives application restarts
-- **Responsive Design**: Works on desktop, tablet, and mobile devices
+- **Mobile Responsive**: Optimized layout for iPhone, iPad, and desktop — charts fit the screen on mobile devices
 
 ## Architecture
 
@@ -48,22 +50,27 @@ src/
 
 ```
 public/
-├── index.html         # Main dashboard interface
+├── index.html         # Temperature dashboard page
+├── lights.html        # Lights control dashboard page
 ├── css/
-│   └── styles.css     # Responsive styling with modal components
+│   └── styles.css     # Responsive styling, dark mode, modal components
 └── js/
-    └── app.js         # Frontend logic, Chart.js integration, settings management
+    ├── app.js         # Temperature dashboard logic, Chart.js integration
+    ├── lights.js      # Lights dashboard logic, color conversion, live control
+    └── theme.js       # Light/dark mode toggle with localStorage persistence
 ```
 
 **Key Components:**
 
-- **Dashboard UI**: Grid layout displaying room cards with current readings
-- **Chart.js Integration**: Line graphs showing temperature over time with motion events
+- **Temperature Dashboard**: Grid layout displaying room cards with current readings, Chart.js graphs, and time range selectors
+- **Lights Dashboard**: Room-grouped light cards with color swatches, click-to-control modal with power toggle, brightness slider, color picker, and color temperature slider
+- **Dark Mode**: Toggle button with sun/moon icons, persists via localStorage, CSS uses `[data-theme="dark"]` selectors
 - **Settings Modal**: Admin interface for configuring poll rate and y-axis scaling
-- **Time Range Controls**: Per-room buttons to select data range (Auto/30d/7d/1d)
+- **Time Range Controls**: Per-room buttons to select data range (Auto/30d/7d/1d/1h)
 - **Smart Sampling**: Automatic data decimation based on time range for optimal performance
-- **Auto-refresh**: Polls backend API every 10 seconds (or configured interval)
-- **LocalStorage**: Persists user settings (poll rate, y-axis scaling, time range) across sessions
+- **Auto-refresh**: Temperature page polls every 10s (configurable), lights page polls every 5s
+- **LocalStorage**: Persists user settings (poll rate, y-axis scaling, time range, theme) across sessions
+- **Mobile Optimized**: Responsive header, single-column cards, touch-friendly buttons, canvas replacement to prevent Chart.js width overflow
 
 ## Installation & Setup
 
@@ -116,7 +123,8 @@ public/
 
 5. **Access the dashboard**
 
-   Open your browser to: `http://localhost:3000`
+   - Temperature: `http://localhost:3000`
+   - Lights: `http://localhost:3000/lights.html`
 
 ## Configuration
 
@@ -149,6 +157,7 @@ public/
 - **30 Days**: Last 30 days with hourly sampling
 - **7 Days**: Last 7 days with 15-minute sampling
 - **1 Day**: Last 24 hours with all data points
+- **1 Hour**: Last 60 minutes with all data points
 
 All settings are saved to browser localStorage and persist across sessions.
 
@@ -167,8 +176,9 @@ The dashboard automatically optimizes graph performance when you have accumulate
    - **30 Days**: Shows last 30 days, sampled hourly (720 data points max)
    - **7 Days**: Shows last 7 days, sampled every 15 minutes (672 data points max)
    - **1 Day**: Shows last 24 hours, all data points (~8,640 points max at 10s polling)
+   - **1 Hour**: Shows last 60 minutes, all data points (~360 points at 10s polling)
 
-3. **Horizontal Scrolling**: Charts automatically expand horizontally (minimum 8 pixels per data point) with native scrollbar support for comfortable navigation through dense datasets.
+3. **Horizontal Scrolling** (Desktop): Charts automatically expand horizontally (minimum 8 pixels per data point) with native scrollbar support for comfortable navigation through dense datasets. On mobile, charts fit the screen width automatically.
 
 **Performance Benefits:**
 
@@ -188,6 +198,8 @@ The dashboard automatically optimizes graph performance when you have accumulate
 |----------|--------|-------------|
 | `/api/rooms` | GET | List all rooms with current readings |
 | `/api/rooms/:roomId` | GET | Detailed room data with full history |
+| `/api/lights` | GET | All lights grouped by room with state/color info |
+| `/api/lights/:id/state` | PUT | Control a light (on, bri, hue, sat, xy, ct, effect, alert, transitiontime) |
 | `/api/health` | GET | Health check and last poll timestamp |
 | `/api/stats` | GET | Database statistics (total readings, size, data range) |
 
@@ -220,10 +232,13 @@ The dashboard automatically optimizes graph performance when you have accumulate
 └─────────────────────────────────────────┘
                   ↓
 ┌─────────────────────────────────────────┐
-│ Frontend Dashboard                      │
-│  ├─ Fetches updates every 10s           │
-│  ├─ Renders temperature graphs          │
-│  └─ Shows motion/lux indicators         │
+│ Frontend Dashboards                     │
+│  ├─ Temperature: updates every 10s      │
+│  │   ├─ Renders temperature graphs      │
+│  │   └─ Shows motion/lux indicators     │
+│  └─ Lights: updates every 5s            │
+│      ├─ Shows light states and colors   │
+│      └─ Sends control commands (PUT)    │
 └─────────────────────────────────────────┘
 
 On Server Restart:
@@ -237,8 +252,9 @@ SQLite Database → Data Store → Graphs populated with historical data
     - > 7 days of data: Shows 30 days with hourly samples
     - 1-7 days of data: Shows 7 days with 15-minute samples
     - < 1 day of data: Shows all data points
-  - **Manual control**: Quick-select buttons for 30-day, 7-day, 1-day, or auto ranges
-- **Horizontal Scrolling**: Charts expand horizontally (8px per data point) with native scrollbar support
+  - **Manual control**: Quick-select buttons for 30-day, 7-day, 1-day, 1-hour, or auto ranges
+- **Horizontal Scrolling** (Desktop): Charts expand horizontally (8px per data point) with native scrollbar support
+- **Mobile Fit**: On screens ≤768px, charts fit within the viewport — canvas element is replaced on each render to prevent Chart.js width leaks
 - **Auto-scaling X-axis**: Automatically adjusts time labels based on data range
 - **Smart Time Labels**:
   - < 12 hours: Shows time only (10:30 AM)
@@ -262,15 +278,25 @@ hue/
 ├── .env                   # Environment configuration (not in git)
 ├── .gitignore            # Git ignore rules
 ├── server.js             # Express server entry point
+├── CLAUDE.md             # Architecture reference for AI sessions
+├── data/
+│   └── hue-sensors.db    # SQLite database (auto-created)
 ├── src/                  # Backend source code
-│   ├── config.js
-│   ├── dataStore.js
-│   ├── hueClient.js
-│   └── api/routes.js
+│   ├── config.js         # Environment configuration loader
+│   ├── database.js       # SQLite schema and CRUD operations
+│   ├── dataStore.js      # In-memory cache + database sync
+│   ├── hueClient.js      # Hue Bridge HTTPS client
+│   └── api/
+│       └── routes.js     # REST API endpoints
 └── public/               # Frontend static files
-    ├── index.html
-    ├── css/styles.css
-    └── js/app.js
+    ├── index.html        # Temperature dashboard
+    ├── lights.html       # Lights control dashboard
+    ├── css/
+    │   └── styles.css    # All styles + dark mode + responsive
+    └── js/
+        ├── app.js        # Temperature dashboard logic
+        ├── lights.js     # Lights dashboard logic
+        └── theme.js      # Dark/light theme toggle
 ```
 
 ### Development Mode
@@ -376,7 +402,7 @@ The app converts UTC timestamps from Hue Bridge to local time. If times appear w
 - **Zoom & Pan**: Interactive chart controls for detailed analysis (TODO)
 - **Annotations**: Add notes/markers for events (e.g., "furnace serviced") (TODO)
 - **Dashboard Layouts**: Customizable grid layouts, full-screen mode (TODO)
-- **Dark Mode**: Theme switcher for night viewing (TODO)
+- **Dark Mode**: ✅ Theme switcher with persistent preference
 
 ### Integration & Automation
 
@@ -444,10 +470,28 @@ MIT License - feel free to use this project for personal or commercial purposes.
 
 ---
 
-**Version**: 1.1.0
+**Version**: 1.2.0
 **Last Updated**: February 2026
 
 ## Changelog
+
+### Version 1.2.0 (February 2026)
+- **Lights Dashboard**: New page to view and control all Hue lights organized by room
+  - Click any light to open a control modal with power toggle, brightness slider, color picker, and color temperature slider
+  - Live control — changes sent immediately via debounced PUT calls (no save button)
+  - Color swatches show actual light color using CIE xy → RGB conversion
+  - Supports Extended color, Color temperature, Dimmable, and On/Off light types
+- **Dark Mode**: Light/dark theme toggle button on both pages with sun/moon icons
+  - Persists to localStorage, shared across Temperature and Lights pages
+  - Comprehensive dark styling for all components, modals, and controls
+- **1 Hour Time Range**: New quick-select button for viewing the last 60 minutes
+- **Per-Room Time Ranges**: Fixed bug where clicking a time range button changed all rooms — now each room independently tracks its selected range
+- **Mobile Responsive Improvements**:
+  - Charts now fit the screen on mobile (canvas element replaced on each render to prevent Chart.js width leaks)
+  - Header layout wraps properly on narrow screens — title + buttons on row 1, nav on row 2
+  - Compact header padding, smaller buttons, touch-friendly time range controls
+  - Single-column card layout on screens ≤768px
+- **Version Display**: Footer shows v1.2 on both pages
 
 ### Version 1.1.0 (February 2026)
 - Added smart data sampling for optimal performance with large datasets
