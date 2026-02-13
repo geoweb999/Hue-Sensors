@@ -510,8 +510,10 @@ async function updateRoomChart(roomId) {
     const isMobile = window.innerWidth <= 768;
 
     if (isMobile) {
-      // On mobile, fit chart to screen width — let Chart.js decimation handle density
-      canvas.style.width = '100%';
+      // On mobile, remove any inline width so CSS controls sizing
+      canvas.style.removeProperty('width');
+      canvas.removeAttribute('width');
+      canvas.removeAttribute('height');
     } else {
       // On desktop, allow horizontal scrolling for dense data
       const minWidthPerPoint = 8;
