@@ -505,14 +505,19 @@ async function updateRoomChart(roomId) {
       charts[roomId].destroy();
     }
 
-    // Calculate canvas width for horizontal scrolling
-    // Minimum 8 pixels per data point for comfortable viewing
-    const minWidthPerPoint = 8;
+    // Calculate canvas width for horizontal scrolling (desktop only)
     const containerWidth = canvas.parentElement.clientWidth;
-    const calculatedWidth = Math.max(containerWidth, dataPointCount * minWidthPerPoint);
+    const isMobile = window.innerWidth <= 768;
 
-    // Set canvas width for horizontal scrolling
-    canvas.style.width = calculatedWidth + 'px';
+    if (isMobile) {
+      // On mobile, fit chart to screen width — let Chart.js decimation handle density
+      canvas.style.width = '100%';
+    } else {
+      // On desktop, allow horizontal scrolling for dense data
+      const minWidthPerPoint = 8;
+      const calculatedWidth = Math.max(containerWidth, dataPointCount * minWidthPerPoint);
+      canvas.style.width = calculatedWidth + 'px';
+    }
 
     // Create new chart
     const ctx = canvas.getContext('2d');
