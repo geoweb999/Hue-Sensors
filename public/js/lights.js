@@ -6,6 +6,8 @@ let refreshIntervalId = null;
 const lightDataMap = new Map();
 let currentLightId = null;
 let sendTimeout = null;
+let roomSliderTimeouts = {};    // debounce timers per room
+let roomSliderActive = {};      // true while user is dragging a room slider
 
 // ── Color Conversion ─────────────────────────────────────────────
 
@@ -223,7 +225,8 @@ function renderRooms(rooms) {
     currentIds.add(cardId);
 
     let card = document.getElementById(cardId);
-    if (!card) {
+    const isNew = !card;
+    if (isNew) {
       card = document.createElement('div');
       card.className = 'room-card';
       card.id = cardId;
@@ -233,10 +236,31 @@ function renderRooms(rooms) {
     const onCount = room.lights.filter(l => l.on).length;
     const totalCount = room.lights.length;
 
+    // Calculate average brightness of reachable, on lights
+    const onReachable = room.lights.filter(l => l.on && l.reachable);
+    const avgBri = onReachable.length > 0
+      ? Math.round(onReachable.reduce((sum, l) => sum + l.brightness, 0) / onReachable.length)
+      : 0;
+    const avgPercent = Math.round((avgBri / 254) * 100);
+
+    // Skip full rebuild if user is actively dragging the room slider
+    if (!isNew && roomSliderActive[room.id]) {
+      // Update only the light count and lights grid, leave slider alone
+      const countEl = card.querySelector('.room-light-count');
+      if (countEl) countEl.textContent = `${onCount}/${totalCount} on`;
+      const grid = card.querySelector('.lights-grid');
+      if (grid) grid.innerHTML = room.lights.map(light => renderLight(light)).join('');
+      continue;
+    }
+
     card.innerHTML = `
       <div class="room-header">
         <div class="room-name">${escapeHtml(room.name)}</div>
         <span class="room-light-count">${onCount}/${totalCount} on</span>
+      </div>
+      <div class="room-brightness-control">
+        <label>Room Brightness: <span class="room-bri-value">${avgPercent}%</span></label>
+        <input type="range" class="room-brightness-slider" min="1" max="254" value="${avgBri || 1}" data-room-id="${room.id}">
       </div>
       <div class="lights-grid">
         ${room.lights.map(light => renderLight(light)).join('')}
@@ -492,10 +516,91 @@ function initLightControlModal() {
   });
 }
 
+// ── Room Brightness Slider ───────────────────────────────────────
+
+function initRoomBrightnessSliders() {
+  const container = document.getElementById('rooms-container');
+
+  container.addEventListener('input', (e) => {
+    const slider = e.target.closest('.room-brightness-slider');
+    if (!slider) return;
+
+    const roomId = slider.dataset.roomId;
+    const bri = parseInt(slider.value);
+    const percent = Math.round((bri / 254) * 100);
+
+    // Update the label
+    const control = slider.closest('.room-brightness-control');
+    const label = control.querySelector('.room-bri-value');
+    if (label) label.textContent = percent + '%';
+
+    // Mark slider as active so polling doesn't overwrite it
+    roomSliderActive[roomId] = true;
+
+    // Debounce the API calls per room
+    if (roomSliderTimeouts[roomId]) clearTimeout(roomSliderTimeouts[roomId]);
+    roomSliderTimeouts[roomId] = setTimeout(() => {
+      sendRoomBrightness(roomId, bri);
+    }, 150);
+  });
+
+  // Clear active flag when user releases the slider
+  container.addEventListener('pointerup', (e) => {
+    const slider = e.target.closest('.room-brightness-slider');
+    if (!slider) return;
+    const roomId = slider.dataset.roomId;
+    // Delay clearing so the last debounced send completes before next poll rebuilds
+    setTimeout(() => { roomSliderActive[roomId] = false; }, 500);
+  });
+
+  container.addEventListener('change', (e) => {
+    const slider = e.target.closest('.room-brightness-slider');
+    if (!slider) return;
+    const roomId = slider.dataset.roomId;
+    setTimeout(() => { roomSliderActive[roomId] = false; }, 500);
+  });
+}
+
+async function sendRoomBrightness(roomId, bri) {
+  // Find all reachable, on lights in this room from lightDataMap
+  const container = document.getElementById(`room-${roomId}`);
+  if (!container) return;
+
+  const lightItems = container.querySelectorAll('.light-item');
+  const promises = [];
+
+  for (const item of lightItems) {
+    const lightId = item.dataset.lightId;
+    const light = lightDataMap.get(lightId);
+    if (!light || !light.reachable) continue;
+
+    // Send brightness (and turn on if off)
+    const stateObj = light.on ? { bri } : { on: true, bri };
+    promises.push(
+      fetch(`/api/lights/${lightId}/state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stateObj)
+      }).then(r => r.json()).catch(err => {
+        console.error(`Error setting brightness for light ${lightId}:`, err);
+      })
+    );
+
+    // Update local data
+    if (light) {
+      light.brightness = bri;
+      if (!light.on) light.on = true;
+    }
+  }
+
+  await Promise.all(promises);
+}
+
 // ── Init ─────────────────────────────────────────────────────────
 
 async function init() {
   initLightControlModal();
+  initRoomBrightnessSliders();
   await fetchAndRenderLights();
   refreshIntervalId = setInterval(fetchAndRenderLights, REFRESH_INTERVAL);
 }
