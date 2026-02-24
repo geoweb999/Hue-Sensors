@@ -402,16 +402,21 @@ async function resolveV2Ids(v1GroupId) {
   const glService = (room.services || []).find(s => s.rtype === 'grouped_light');
   if (!glService) throw new Error(`No grouped_light for room ${room.id}`);
 
-  // Build v1 lightId → v2 lightId map
+  // Build v1 lightId → v2 lightId map, plus per-light capability flags
   const lightIdMap = {};
+  const lightCapMap = {};  // v2LightId → { hasDimming, hasColor }
   for (const light of lights) {
     if (light.id_v1) {
       const v1Id = light.id_v1.replace('/lights/', '');
       lightIdMap[v1Id] = light.id;
+      lightCapMap[light.id] = {
+        hasDimming: 'dimming' in light,
+        hasColor: 'color' in light
+      };
     }
   }
 
-  return { roomV2Id: room.id, groupedLightId: glService.rid, lightIdMap };
+  return { roomV2Id: room.id, groupedLightId: glService.rid, lightIdMap, lightCapMap };
 }
 
 // GET /api/v2/rooms/:groupId/info - v2 IDs for a room (used by frontend on page load)
@@ -479,7 +484,7 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
       return res.status(400).json({ success: false, error: 'palette must have at least 2 colors' });
     }
 
-    const { roomV2Id, lightIdMap } = await resolveV2Ids(groupId);
+    const { roomV2Id, lightIdMap, lightCapMap } = await resolveV2Ids(groupId);
 
     // Convert hex + brightness into v2 palette format
     const v2Palette = palette.map(({ hex, brightness = 80 }) => ({
@@ -488,18 +493,16 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
     }));
 
     // Build actions array — required by SceneServicePost schema.
-    // Distribute palette colors round-robin across lights for the initial state.
+    // Distribute palette colors round-robin. Only include dimming/color for
+    // lights that support them (on/off-only plugs support neither).
     const lightV2Ids = Object.values(lightIdMap);
     const actions = lightV2Ids.map((lightId, i) => {
       const colorEntry = v2Palette[i % v2Palette.length];
-      return {
-        target: { rid: lightId, rtype: 'light' },
-        action: {
-          on: { on: true },
-          dimming: { brightness: colorEntry.dimming.brightness },
-          color: { xy: colorEntry.color.xy }
-        }
-      };
+      const caps = lightCapMap[lightId] || {};
+      const action = { on: { on: true } };
+      if (caps.hasDimming) action.dimming = { brightness: colorEntry.dimming.brightness };
+      if (caps.hasColor) action.color = { xy: colorEntry.color.xy };
+      return { target: { rid: lightId, rtype: 'light' }, action };
     });
 
     const result = await hueClient.v2CreateDynamicScene(name.trim(), roomV2Id, v2Palette, actions);
