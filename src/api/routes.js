@@ -479,7 +479,7 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
       return res.status(400).json({ success: false, error: 'palette must have at least 2 colors' });
     }
 
-    const { roomV2Id } = await resolveV2Ids(groupId);
+    const { roomV2Id, lightIdMap } = await resolveV2Ids(groupId);
 
     // Convert hex + brightness into v2 palette format
     const v2Palette = palette.map(({ hex, brightness = 80 }) => ({
@@ -487,10 +487,26 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
       dimming: { brightness: Math.max(1, Math.min(100, brightness)) }
     }));
 
-    const result = await hueClient.v2CreateDynamicScene(name.trim(), roomV2Id, v2Palette);
+    // Build actions array — required by SceneServicePost schema.
+    // Distribute palette colors round-robin across lights for the initial state.
+    const lightV2Ids = Object.values(lightIdMap);
+    const actions = lightV2Ids.map((lightId, i) => {
+      const colorEntry = v2Palette[i % v2Palette.length];
+      return {
+        target: { rid: lightId, rtype: 'light' },
+        action: {
+          on: { on: true },
+          dimming: { brightness: colorEntry.dimming.brightness },
+          color: { xy: colorEntry.color.xy }
+        }
+      };
+    });
+
+    const result = await hueClient.v2CreateDynamicScene(name.trim(), roomV2Id, v2Palette, actions);
     const errors = (result.errors || []);
     if (errors.length > 0) {
-      return res.status(400).json({ success: false, errors });
+      const errMsg = errors.map(e => e.description).join('; ');
+      return res.status(400).json({ success: false, error: errMsg });
     }
 
     // Bridge returns { data: [{ rid: "<sceneId>", rtype: "scene" }] }

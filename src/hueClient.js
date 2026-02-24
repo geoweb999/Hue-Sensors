@@ -185,10 +185,11 @@ class HueClient {
 
   // Create a dynamic palette scene on the bridge
   // palette = [{color:{xy:{x,y}}, dimming:{brightness}}]  (brightness 0-100)
-  async v2CreateDynamicScene(name, roomV2Id, palette) {
+  async v2CreateDynamicScene(name, roomV2Id, palette, actions) {
     return this._v2Request('/scene', 'POST', {
       metadata: { name },
       group: { rid: roomV2Id, rtype: 'room' },
+      actions,
       palette: { color: palette, dimming: [], color_temperature: [] }
     });
   }
