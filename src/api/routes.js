@@ -402,11 +402,18 @@ async function resolveV2Ids(v1GroupId) {
   const glService = (room.services || []).find(s => s.rtype === 'grouped_light');
   if (!glService) throw new Error(`No grouped_light for room ${room.id}`);
 
-  // Build v1 lightId → v2 lightId map, plus per-light capability flags
+  // Collect device RIDs that belong to this room
+  const roomDeviceRids = new Set(
+    (room.children || []).filter(c => c.rtype === 'device').map(c => c.rid)
+  );
+
+  // Build v1 lightId → v2 lightId map, plus per-light capability flags.
+  // Only include lights whose owner device is in this room — the bridge
+  // rejects scene actions that reference lights outside the group.
   const lightIdMap = {};
   const lightCapMap = {};  // v2LightId → { hasDimming, hasColor }
   for (const light of lights) {
-    if (light.id_v1) {
+    if (light.id_v1 && light.owner && roomDeviceRids.has(light.owner.rid)) {
       const v1Id = light.id_v1.replace('/lights/', '');
       lightIdMap[v1Id] = light.id;
       lightCapMap[light.id] = {
