@@ -189,7 +189,7 @@ class HueClient {
     return this._v2Request('/scene', 'POST', {
       metadata: { name },
       group: { rid: roomV2Id, rtype: 'room' },
-      palette: { color: palette }
+      palette: { color: palette, dimming: [], color_temperature: [] }
     });
   }
 
