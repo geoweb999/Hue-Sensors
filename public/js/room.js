@@ -414,6 +414,10 @@ function renderRoom(data) {
   const autoSection = document.getElementById('automations-section');
   autoSection.classList.remove('hidden');
   renderAutomations(data.schedules, data.rules);
+
+  // Animation effects section — always show (v2 check happens inside initAnimationSection)
+  const animSection = document.getElementById('anim-section');
+  if (animSection) animSection.classList.remove('hidden');
 }
 
 // ── Status helpers ────────────────────────────────────────────────
@@ -740,6 +744,375 @@ function initSceneControls() {
   });
 }
 
+// ── Animation Effects (Hue API v2) ────────────────────────────────
+
+// v2 IDs for this room — resolved once on init
+let v2RoomInfo = null; // { roomV2Id, groupedLightId, lightIdMap }
+
+const EFFECTS = [
+  { id: 'candle',     label: '🕯 Candle' },
+  { id: 'fire',       label: '🔥 Fire' },
+  { id: 'sparkle',    label: '✨ Sparkle' },
+  { id: 'colorloop',  label: '🌈 Colorloop' },
+  { id: 'cosmos',     label: '🌌 Cosmos' },
+  { id: 'enchant',    label: '🪄 Enchant' },
+  { id: 'sunbeam',    label: '☀️ Sunbeam' },
+  { id: 'underwater', label: '🐠 Underwater' },
+  { id: 'no_effect',  label: '⏹ Stop', isStop: true }
+];
+
+function speedLabel(value) {
+  if (value <= 20) return 'Very Slow';
+  if (value <= 40) return 'Slow';
+  if (value <= 60) return 'Medium';
+  if (value <= 80) return 'Fast';
+  return 'Very Fast';
+}
+
+// localStorage helpers
+function loadAnimScenes(rid) {
+  try {
+    return JSON.parse(localStorage.getItem(`hueV2Scenes_${rid}`) || '[]');
+  } catch { return []; }
+}
+function saveAnimScenes(rid, scenes) {
+  localStorage.setItem(`hueV2Scenes_${rid}`, JSON.stringify(scenes));
+}
+
+function renderDynamicSceneCard(scene) {
+  const speed = Math.round((scene.speed || 0.5) * 100);
+  return `
+    <div class="anim-scene-card" data-scene-id="${escapeHtml(scene.sceneId)}">
+      <div class="anim-scene-info">
+        <span class="anim-scene-name">${escapeHtml(scene.name)}</span>
+        <span class="anim-scene-speed-badge">${speedLabel(speed)}</span>
+      </div>
+      <div class="anim-scene-palette">
+        ${(scene.palette || []).map(p => `<span class="anim-palette-dot" style="background:${escapeHtml(p.hex)}"></span>`).join('')}
+      </div>
+      <div class="anim-scene-actions">
+        <button class="anim-play-btn" data-scene-id="${escapeHtml(scene.sceneId)}" data-speed="${scene.speed || 0.5}">▶ Play</button>
+        <button class="anim-stop-btn" data-scene-id="${escapeHtml(scene.sceneId)}">■ Stop</button>
+        <button class="anim-delete-scene-btn" data-scene-id="${escapeHtml(scene.sceneId)}" title="Delete">×</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderDynamicScenesList() {
+  const list = document.getElementById('anim-dynamic-scenes-list');
+  if (!list) return;
+  const scenes = loadAnimScenes(roomId);
+  if (scenes.length === 0) {
+    list.innerHTML = '<p class="no-items-msg">No dynamic scenes saved yet.</p>';
+  } else {
+    list.innerHTML = scenes.map(renderDynamicSceneCard).join('');
+  }
+}
+
+function renderEffectChips() {
+  const row = document.getElementById('anim-room-effects');
+  if (!row) return;
+  row.innerHTML = EFFECTS.map(e => `
+    <button class="anim-effect-chip${e.isStop ? ' stop-chip' : ''}" data-effect="${e.id}">
+      ${e.label}
+    </button>
+  `).join('');
+}
+
+async function initAnimationSection() {
+  // Fetch v2 room info — if bridge doesn't support v2 hide the section gracefully
+  const animSection = document.getElementById('anim-section');
+  try {
+    const res = await fetch(`/api/v2/rooms/${roomId}/info`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'v2 not available');
+    v2RoomInfo = { roomV2Id: data.roomV2Id, groupedLightId: data.groupedLightId, lightIdMap: data.lightIdMap };
+  } catch (err) {
+    console.warn('Hue v2 API not available for this room:', err.message);
+    if (animSection) {
+      animSection.querySelector('p.anim-section-hint').textContent = 'Animation effects require Hue Bridge firmware 1.50+.';
+      animSection.querySelector('#anim-room-effects').style.display = 'none';
+      animSection.querySelector('.anim-builder').style.display = 'none';
+    }
+    return;
+  }
+
+  renderEffectChips();
+  renderDynamicScenesList();
+
+  // Effect chip clicks — apply effect to whole room
+  const effectsRow = document.getElementById('anim-room-effects');
+  effectsRow.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.anim-effect-chip');
+    if (!btn) return;
+    const effect = btn.dataset.effect;
+
+    // Visual feedback
+    effectsRow.querySelectorAll('.anim-effect-chip').forEach(b => b.classList.remove('active'));
+    if (!btn.classList.contains('stop-chip')) btn.classList.add('active');
+
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/v2/rooms/${roomId}/effect`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ effect })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error((data.errors?.[0]?.description) || 'Failed');
+    } catch (err) {
+      console.error('Effect error:', err.message);
+      effectsRow.querySelectorAll('.anim-effect-chip').forEach(b => b.classList.remove('active'));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Dynamic scene list — play / stop / delete
+  const scenesList = document.getElementById('anim-dynamic-scenes-list');
+  scenesList.addEventListener('click', async (e) => {
+    // Play
+    const playBtn = e.target.closest('.anim-play-btn');
+    if (playBtn) {
+      const sceneId = playBtn.dataset.sceneId;
+      const speed = parseFloat(playBtn.dataset.speed) || 0.5;
+      playBtn.disabled = true;
+      playBtn.textContent = '...';
+      try {
+        const res = await fetch(`/api/v2/scenes/${sceneId}/recall`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'dynamic_palette', speed })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error((data.errors?.[0]?.description) || 'Failed');
+        playBtn.textContent = '▶ Playing';
+        setTimeout(() => { playBtn.textContent = '▶ Play'; playBtn.disabled = false; }, 2000);
+      } catch (err) {
+        playBtn.textContent = 'Error';
+        setTimeout(() => { playBtn.textContent = '▶ Play'; playBtn.disabled = false; }, 2000);
+      }
+      return;
+    }
+
+    // Stop
+    const stopBtn = e.target.closest('.anim-stop-btn');
+    if (stopBtn) {
+      const sceneId = stopBtn.dataset.sceneId;
+      stopBtn.disabled = true;
+      try {
+        await fetch(`/api/v2/scenes/${sceneId}/recall`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'active' })
+        });
+      } catch (err) {
+        console.error('Stop error:', err.message);
+      } finally {
+        stopBtn.disabled = false;
+      }
+      return;
+    }
+
+    // Delete
+    const delBtn = e.target.closest('.anim-delete-scene-btn');
+    if (delBtn) {
+      const sceneId = delBtn.dataset.sceneId;
+      const card = delBtn.closest('.anim-scene-card');
+      const name = card?.querySelector('.anim-scene-name')?.textContent || 'this scene';
+      if (!confirm(`Delete dynamic scene "${name}"?\nThis will also remove it from the Hue Bridge.`)) return;
+
+      delBtn.disabled = true;
+      try {
+        await fetch(`/api/v2/scenes/${sceneId}`, { method: 'DELETE' });
+        // Remove from localStorage regardless of bridge result
+        const scenes = loadAnimScenes(roomId).filter(s => s.sceneId !== sceneId);
+        saveAnimScenes(roomId, scenes);
+        renderDynamicScenesList();
+      } catch (err) {
+        console.error('Delete error:', err.message);
+        delBtn.disabled = false;
+      }
+    }
+  });
+}
+
+// ── Animation builder modal ────────────────────────────────────────
+
+const DEFAULT_FRAME_COLORS = ['#c45cff', '#3c8fff', '#5cffc4'];
+let editingSceneIndex = -1; // -1 = new scene
+
+function makeFrameRow(hex = '#ffffff', brightness = 80) {
+  const row = document.createElement('div');
+  row.className = 'anim-frame-row';
+  row.innerHTML = `
+    <span class="anim-frame-swatch" style="background:${escapeHtml(hex)}"></span>
+    <input type="color" class="anim-frame-color" value="${escapeHtml(hex)}">
+    <label class="anim-frame-bri-label">
+      <span>Brightness</span>
+      <input type="range" class="anim-frame-bri" min="1" max="100" value="${brightness}">
+      <span class="anim-frame-bri-val">${brightness}%</span>
+    </label>
+    <button class="anim-frame-remove" title="Remove color">×</button>
+  `;
+
+  const colorInput = row.querySelector('.anim-frame-color');
+  const swatch = row.querySelector('.anim-frame-swatch');
+  const briSlider = row.querySelector('.anim-frame-bri');
+  const briVal = row.querySelector('.anim-frame-bri-val');
+  const removeBtn = row.querySelector('.anim-frame-remove');
+
+  colorInput.addEventListener('input', () => {
+    swatch.style.background = colorInput.value;
+  });
+  briSlider.addEventListener('input', () => {
+    briVal.textContent = briSlider.value + '%';
+  });
+  removeBtn.addEventListener('click', () => {
+    const framesList = document.getElementById('anim-frames-list');
+    if (framesList.querySelectorAll('.anim-frame-row').length > 2) {
+      row.remove();
+      updateFrameRemovability();
+    }
+  });
+
+  return row;
+}
+
+function updateFrameRemovability() {
+  const rows = document.getElementById('anim-frames-list').querySelectorAll('.anim-frame-row');
+  rows.forEach(r => {
+    r.querySelector('.anim-frame-remove').disabled = rows.length <= 2;
+  });
+}
+
+function openAnimModal(scene = null) {
+  const modal = document.getElementById('anim-builder-modal');
+  const title = document.getElementById('anim-modal-title');
+  const nameInput = document.getElementById('anim-scene-name');
+  const framesList = document.getElementById('anim-frames-list');
+  const speedSlider = document.getElementById('anim-speed-slider');
+  const speedLabelEl = document.getElementById('anim-speed-label');
+
+  framesList.innerHTML = '';
+
+  if (scene) {
+    title.textContent = 'Edit Dynamic Scene';
+    nameInput.value = scene.name;
+    const speedVal = Math.round((scene.speed || 0.5) * 100);
+    speedSlider.value = speedVal;
+    speedLabelEl.textContent = speedLabel(speedVal);
+    (scene.palette || []).forEach(p => framesList.appendChild(makeFrameRow(p.hex, p.brightness || 80)));
+    editingSceneIndex = loadAnimScenes(roomId).findIndex(s => s.sceneId === scene.sceneId);
+  } else {
+    title.textContent = 'New Dynamic Scene';
+    nameInput.value = '';
+    speedSlider.value = 40;
+    speedLabelEl.textContent = speedLabel(40);
+    DEFAULT_FRAME_COLORS.forEach(hex => framesList.appendChild(makeFrameRow(hex)));
+    editingSceneIndex = -1;
+  }
+
+  updateFrameRemovability();
+  modal.classList.add('active');
+  nameInput.focus();
+}
+
+function closeAnimModal() {
+  document.getElementById('anim-builder-modal').classList.remove('active');
+}
+
+function initAnimBuilderModal() {
+  const modal = document.getElementById('anim-builder-modal');
+  const closeBtn = document.getElementById('anim-modal-close');
+  const cancelBtn = document.getElementById('anim-cancel-btn');
+  const addFrameBtn = document.getElementById('anim-add-frame-btn');
+  const speedSlider = document.getElementById('anim-speed-slider');
+  const speedLabelEl = document.getElementById('anim-speed-label');
+  const saveBtn = document.getElementById('anim-save-btn');
+  const newSceneBtn = document.getElementById('anim-new-scene-btn');
+
+  // Open modal for new scene
+  newSceneBtn.addEventListener('click', () => openAnimModal());
+
+  // Close
+  closeBtn.addEventListener('click', closeAnimModal);
+  cancelBtn.addEventListener('click', closeAnimModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeAnimModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) closeAnimModal();
+  });
+
+  // Speed slider label
+  speedSlider.addEventListener('input', () => {
+    speedLabelEl.textContent = speedLabel(parseInt(speedSlider.value));
+  });
+
+  // Add frame
+  addFrameBtn.addEventListener('click', () => {
+    const framesList = document.getElementById('anim-frames-list');
+    if (framesList.querySelectorAll('.anim-frame-row').length >= 6) return;
+    framesList.appendChild(makeFrameRow());
+    updateFrameRemovability();
+  });
+
+  // Save
+  saveBtn.addEventListener('click', async () => {
+    const nameInput = document.getElementById('anim-scene-name');
+    const name = nameInput.value.trim();
+    if (!name) { nameInput.focus(); return; }
+
+    const frameRows = document.getElementById('anim-frames-list').querySelectorAll('.anim-frame-row');
+    const palette = Array.from(frameRows).map(row => ({
+      hex: row.querySelector('.anim-frame-color').value,
+      brightness: parseInt(row.querySelector('.anim-frame-bri').value)
+    }));
+    const speed = parseInt(document.getElementById('anim-speed-slider').value) / 100;
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+      // If editing, delete the old bridge scene first
+      if (editingSceneIndex >= 0) {
+        const existing = loadAnimScenes(roomId)[editingSceneIndex];
+        if (existing?.sceneId) {
+          await fetch(`/api/v2/scenes/${existing.sceneId}`, { method: 'DELETE' }).catch(() => {});
+        }
+      }
+
+      const res = await fetch(`/api/v2/rooms/${roomId}/dynamic-scene`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, palette, speed })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error((data.errors?.[0]?.description) || data.error || 'Failed');
+
+      // Persist to localStorage
+      const scenes = loadAnimScenes(roomId);
+      const sceneEntry = { sceneId: data.sceneId, name, palette, speed };
+      if (editingSceneIndex >= 0) {
+        scenes[editingSceneIndex] = sceneEntry;
+      } else {
+        scenes.push(sceneEntry);
+      }
+      saveAnimScenes(roomId, scenes);
+      renderDynamicScenesList();
+      closeAnimModal();
+    } catch (err) {
+      saveBtn.textContent = 'Error — retry?';
+      alert(`Could not save dynamic scene: ${err.message}`);
+      setTimeout(() => { saveBtn.textContent = 'Save & Play'; saveBtn.disabled = false; }, 2000);
+      return;
+    }
+
+    saveBtn.textContent = 'Save & Play';
+    saveBtn.disabled = false;
+  });
+}
+
 // ── Init ──────────────────────────────────────────────────────────
 
 async function init() {
@@ -753,9 +1126,13 @@ async function init() {
   initLightControls();
   initRoomBrightness();
   initSceneControls();
+  initAnimBuilderModal();
 
   await fetchAndRenderRoom();
   refreshIntervalId = setInterval(fetchAndRenderRoom, REFRESH_INTERVAL);
+
+  // Init animation section after initial render (non-blocking)
+  initAnimationSection();
 }
 
 document.addEventListener('DOMContentLoaded', init);

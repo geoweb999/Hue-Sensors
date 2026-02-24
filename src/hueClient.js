@@ -49,6 +49,42 @@ class HueClient {
     });
   }
 
+  // Hue CLIP API v2 — uses hue-application-key header, /clip/v2/resource/ base path
+  _v2Request(path, method = 'GET', body = null) {
+    return new Promise((resolve, reject) => {
+      const headers = { 'hue-application-key': this.apiToken };
+      if (body) headers['Content-Type'] = 'application/json';
+
+      const options = {
+        hostname: this.bridgeIp,
+        port: 443,
+        path: `/clip/v2/resource${path}`,
+        method,
+        rejectUnauthorized: false,
+        headers
+      };
+
+      const req = https.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (error) {
+            reject(new Error(`Failed to parse Hue v2 API response: ${error.message}`));
+          }
+        });
+      });
+
+      req.on('error', (error) => {
+        reject(new Error(`Failed to connect to Hue Bridge (v2): ${error.message}`));
+      });
+
+      if (body) req.write(JSON.stringify(body));
+      req.end();
+    });
+  }
+
   async getSensors() {
     return this._request(`/api/${this.apiToken}/sensors`);
   }
@@ -119,6 +155,54 @@ class HueClient {
       `/api/${this.apiToken}/scenes/${sceneId}`,
       'DELETE'
     );
+  }
+
+  // ── Hue CLIP API v2 methods ────────────────────────────────────────────────
+
+  // Get all v2 rooms (includes id_v1 and services[] with grouped_light rid)
+  async v2GetRooms() {
+    return this._v2Request('/room');
+  }
+
+  // Get all v2 lights (includes id_v1 linking to v1 light ID)
+  async v2GetLights() {
+    return this._v2Request('/light');
+  }
+
+  // Apply a named effect to a single light (candle, fire, sparkle, colorloop, no_effect, etc.)
+  async v2SetLightEffect(v2LightId, effect) {
+    return this._v2Request(`/light/${v2LightId}`, 'PUT', {
+      effects: { effect }
+    });
+  }
+
+  // Apply a named effect to all lights in a room via its grouped_light resource
+  async v2SetRoomEffect(groupedLightId, effect) {
+    return this._v2Request(`/grouped_light/${groupedLightId}`, 'PUT', {
+      effects: { effect }
+    });
+  }
+
+  // Create a dynamic palette scene on the bridge
+  // palette = [{color:{xy:{x,y}}, dimming:{brightness}}]  (brightness 0-100)
+  async v2CreateDynamicScene(name, roomV2Id, palette) {
+    return this._v2Request('/scene', 'POST', {
+      metadata: { name },
+      group: { rid: roomV2Id, rtype: 'room' },
+      palette: { color: palette }
+    });
+  }
+
+  // Recall a v2 scene — action: "dynamic_palette" (animated) | "active" (static)
+  async v2RecallScene(sceneId, action, speed = 0.5) {
+    const body = { recall: { action } };
+    if (action === 'dynamic_palette') body.recall.speed = speed;
+    return this._v2Request(`/scene/${sceneId}`, 'PUT', body);
+  }
+
+  // Delete a v2 scene
+  async v2DeleteScene(sceneId) {
+    return this._v2Request(`/scene/${sceneId}`, 'DELETE');
   }
 
   async getRoomData() {

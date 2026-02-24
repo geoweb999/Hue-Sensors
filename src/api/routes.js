@@ -356,4 +356,176 @@ router.put('/lights/:id/state', async (req, res) => {
   }
 });
 
+// ── Hue API v2 routes ─────────────────────────────────────────────────────────
+
+// Server-side hex → CIE xy conversion (Wide RGB D65 matrix, matches frontend)
+function hexToXy(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const rLin = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
+  const gLin = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
+  const bLin = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
+  const X = rLin * 0.664511 + gLin * 0.154324 + bLin * 0.162028;
+  const Y = rLin * 0.283881 + gLin * 0.668433 + bLin * 0.047685;
+  const Z = rLin * 0.000088 + gLin * 0.072310 + bLin * 0.986039;
+  const sum = X + Y + Z;
+  if (sum === 0) return { x: 0, y: 0 };
+  return { x: parseFloat((X / sum).toFixed(4)), y: parseFloat((Y / sum).toFixed(4)) };
+}
+
+// Helper: resolve v2 UUIDs from a v1 group ID
+// Returns { roomV2Id, groupedLightId, lightIdMap: { v1LightId: v2LightId } }
+async function resolveV2Ids(v1GroupId) {
+  const [roomsResp, lightsResp] = await Promise.all([
+    hueClient.v2GetRooms(),
+    hueClient.v2GetLights()
+  ]);
+
+  const rooms = roomsResp.data || [];
+  const lights = lightsResp.data || [];
+
+  const room = rooms.find(r => r.id_v1 === `/groups/${v1GroupId}`);
+  if (!room) throw new Error(`No v2 room found for group ${v1GroupId}`);
+
+  const glService = (room.services || []).find(s => s.rtype === 'grouped_light');
+  if (!glService) throw new Error(`No grouped_light for room ${room.id}`);
+
+  // Build v1 lightId → v2 lightId map
+  const lightIdMap = {};
+  for (const light of lights) {
+    if (light.id_v1) {
+      const v1Id = light.id_v1.replace('/lights/', '');
+      lightIdMap[v1Id] = light.id;
+    }
+  }
+
+  return { roomV2Id: room.id, groupedLightId: glService.rid, lightIdMap };
+}
+
+// GET /api/v2/rooms/:groupId/info - v2 IDs for a room (used by frontend on page load)
+router.get('/v2/rooms/:groupId/info', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const ids = await resolveV2Ids(groupId);
+    res.json({ success: true, ...ids });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// PUT /api/v2/rooms/:groupId/effect - apply named effect to whole room
+// Body: { effect: "candle" | "fire" | "sparkle" | "colorloop" | "cosmos" | "enchant" | "sunbeam" | "underwater" | "no_effect" }
+router.put('/v2/rooms/:groupId/effect', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { effect } = req.body;
+    if (!effect) return res.status(400).json({ success: false, error: 'effect is required' });
+
+    const { groupedLightId } = await resolveV2Ids(groupId);
+    const result = await hueClient.v2SetRoomEffect(groupedLightId, effect);
+    const errors = (result.errors || []);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors });
+    }
+    res.json({ success: true, result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// PUT /api/v2/lights/:v2LightId/effect - apply named effect to a single light
+// Body: { effect: "candle" }
+router.put('/v2/lights/:v2LightId/effect', async (req, res) => {
+  try {
+    const { v2LightId } = req.params;
+    const { effect } = req.body;
+    if (!effect) return res.status(400).json({ success: false, error: 'effect is required' });
+
+    const result = await hueClient.v2SetLightEffect(v2LightId, effect);
+    const errors = (result.errors || []);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors });
+    }
+    res.json({ success: true, result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST /api/v2/rooms/:groupId/dynamic-scene - create a dynamic palette scene on the bridge
+// Body: { name: string, palette: [{hex: "#rrggbb", brightness: 0-100}], speed: 0-1 }
+router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { name, palette, speed = 0.5 } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, error: 'name is required' });
+    }
+    if (!Array.isArray(palette) || palette.length < 2) {
+      return res.status(400).json({ success: false, error: 'palette must have at least 2 colors' });
+    }
+
+    const { roomV2Id } = await resolveV2Ids(groupId);
+
+    // Convert hex + brightness into v2 palette format
+    const v2Palette = palette.map(({ hex, brightness = 80 }) => ({
+      color: { xy: hexToXy(hex) },
+      dimming: { brightness: Math.max(1, Math.min(100, brightness)) }
+    }));
+
+    const result = await hueClient.v2CreateDynamicScene(name.trim(), roomV2Id, v2Palette);
+    const errors = (result.errors || []);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors });
+    }
+
+    // Bridge returns { data: [{ rid: "<sceneId>", rtype: "scene" }] }
+    const sceneId = result.data?.[0]?.rid;
+    if (!sceneId) return res.status(500).json({ success: false, error: 'Bridge did not return a scene ID' });
+
+    // Immediately start the animation at the requested speed
+    await hueClient.v2RecallScene(sceneId, 'dynamic_palette', speed);
+
+    res.json({ success: true, sceneId });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// PUT /api/v2/scenes/:sceneId/recall - play or stop a dynamic scene
+// Body: { action: "dynamic_palette", speed: 0-1 }  or  { action: "active" }
+router.put('/v2/scenes/:sceneId/recall', async (req, res) => {
+  try {
+    const { sceneId } = req.params;
+    const { action, speed = 0.5 } = req.body;
+    if (!action) return res.status(400).json({ success: false, error: 'action is required' });
+
+    const result = await hueClient.v2RecallScene(sceneId, action, speed);
+    const errors = (result.errors || []);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors });
+    }
+    res.json({ success: true, result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// DELETE /api/v2/scenes/:sceneId - delete a v2 dynamic scene
+router.delete('/v2/scenes/:sceneId', async (req, res) => {
+  try {
+    const { sceneId } = req.params;
+    const result = await hueClient.v2DeleteScene(sceneId);
+    const errors = (result.errors || []);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 export default router;

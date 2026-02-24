@@ -66,12 +66,58 @@
       </div>
     </div>
 
+    <!-- Animation Effects section -->
+    <div id="anim-section" class="room-section hidden">
+      <h2>Animation Effects</h2>
+      <p class="anim-section-hint">Effects run on the bridge — they keep going even after you close this page.</p>
+      <div class="anim-effects-row" id="anim-room-effects">
+        <!-- effect chips rendered by room.js -->
+      </div>
+      <div class="anim-builder">
+        <h3 class="anim-builder-title">Dynamic Scenes</h3>
+        <p class="anim-section-hint">Pick a palette of colors and the bridge cycles through them continuously.</p>
+        <div id="anim-dynamic-scenes-list" class="anim-dynamic-scenes-list"></div>
+        <button id="anim-new-scene-btn" class="anim-new-scene-btn">+ New Dynamic Scene</button>
+      </div>
+    </div>
+
     <!-- Automations section -->
     <div id="automations-section" class="room-section hidden">
       <h2>Automations</h2>
       <div id="automations-list" class="automations-list"></div>
     </div>
   </main>
+
+  <!-- Animation builder modal -->
+  <div id="anim-builder-modal" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-content anim-modal-content">
+      <button class="close-btn" id="anim-modal-close" aria-label="Close">&times;</button>
+      <h2 id="anim-modal-title">New Dynamic Scene</h2>
+
+      <div class="anim-modal-field">
+        <label for="anim-scene-name">Scene name</label>
+        <input type="text" id="anim-scene-name" class="anim-scene-name-input" placeholder="e.g. Ocean Waves" maxlength="32">
+      </div>
+
+      <div class="anim-modal-field">
+        <label>Colors <span class="anim-palette-hint">(2–6 colors)</span></label>
+        <div id="anim-frames-list" class="anim-frames-list">
+          <!-- frame rows injected by JS -->
+        </div>
+        <button id="anim-add-frame-btn" class="anim-add-frame-btn">+ Add Color</button>
+      </div>
+
+      <div class="anim-modal-field">
+        <label for="anim-speed-slider">Animation speed: <span id="anim-speed-label">Medium</span></label>
+        <input type="range" id="anim-speed-slider" class="anim-speed-slider" min="0" max="100" value="40">
+      </div>
+
+      <div class="modal-buttons">
+        <button id="anim-save-btn" class="btn-primary">Save &amp; Play</button>
+        <button id="anim-cancel-btn" class="btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <footer>
     <p>Room data refreshes every 10 seconds | v1.2</p>
