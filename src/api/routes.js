@@ -199,7 +199,7 @@ router.get('/rooms/:groupId/detail', async (req, res) => {
     // Filter scenes belonging to this group
     const scenes = Object.entries(scenesData)
       .filter(([, s]) => s.group === groupId || (s.type === 'GroupScene' && s.group === groupId))
-      .map(([id, s]) => ({ id, name: s.name, type: s.type, lights: s.lights || [] }));
+      .map(([id, s]) => ({ id, name: s.name, type: s.type, lights: s.lights || [], locked: !!s.locked }));
 
     // Filter schedules that reference this group
     const groupActionPattern = `/groups/${groupId}/action`;

@@ -240,21 +240,45 @@ function renderLightCard(light) {
   `;
 }
 
+function renderSceneCard(scene) {
+  const isAnimated = scene.name.endsWith('-Animation');
+  const displayName = isAnimated ? scene.name.slice(0, -'-Animation'.length) : scene.name;
+  return `
+    <div class="scene-card${isAnimated ? ' scene-animated' : ''}" data-scene-id="${scene.id}">
+      <div class="scene-card-name" title="${escapeHtml(scene.name)}">${escapeHtml(displayName)}</div>
+      <div class="scene-card-actions">
+        <button class="scene-activate-btn" data-scene-id="${scene.id}">Activate</button>
+        ${!scene.locked ? `<button class="scene-delete-btn" data-scene-id="${scene.id}" title="Delete scene">&times;</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
 function renderScenes(scenes) {
   const grid = document.getElementById('scenes-grid');
   if (!scenes || scenes.length === 0) {
     grid.innerHTML = '<p class="no-items-msg">No scenes saved for this room.</p>';
     return;
   }
-  grid.innerHTML = scenes.map(scene => `
-    <div class="scene-card" data-scene-id="${scene.id}">
-      <div class="scene-card-name" title="${escapeHtml(scene.name)}">${escapeHtml(scene.name)}</div>
-      <div class="scene-card-actions">
-        <button class="scene-activate-btn" data-scene-id="${scene.id}">Activate</button>
-        <button class="scene-delete-btn" data-scene-id="${scene.id}" title="Delete scene">&times;</button>
-      </div>
-    </div>
-  `).join('');
+
+  const animated = scenes.filter(s => s.name.endsWith('-Animation'));
+  const staticScenes = scenes.filter(s => !s.name.endsWith('-Animation'));
+
+  let html = '';
+
+  if (staticScenes.length > 0) {
+    if (animated.length > 0) {
+      html += '<div class="scenes-subsection-title">Scenes</div>';
+    }
+    html += '<div class="scenes-subgrid">' + staticScenes.map(renderSceneCard).join('') + '</div>';
+  }
+
+  if (animated.length > 0) {
+    html += '<div class="scenes-subsection-title">Animations</div>';
+    html += '<div class="scenes-subgrid">' + animated.map(renderSceneCard).join('') + '</div>';
+  }
+
+  grid.innerHTML = html;
 }
 
 function formatScheduleTime(timeStr) {
