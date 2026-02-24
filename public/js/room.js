@@ -748,6 +748,7 @@ function initSceneControls() {
 
 // v2 IDs for this room — resolved once on init
 let v2RoomInfo = null; // { roomV2Id, groupedLightId, lightIdMap }
+let activeDynamicSceneId = null; // sceneId currently looping on the bridge
 
 const EFFECTS = [
   { id: 'candle',     label: '🕯 Candle' },
@@ -781,8 +782,9 @@ function saveAnimScenes(rid, scenes) {
 
 function renderDynamicSceneCard(scene) {
   const speed = Math.round((scene.speed || 0.5) * 100);
+  const isPlaying = activeDynamicSceneId === scene.sceneId;
   return `
-    <div class="anim-scene-card" data-scene-id="${escapeHtml(scene.sceneId)}">
+    <div class="anim-scene-card${isPlaying ? ' is-playing' : ''}" data-scene-id="${escapeHtml(scene.sceneId)}">
       <div class="anim-scene-info">
         <span class="anim-scene-name">${escapeHtml(scene.name)}</span>
         <span class="anim-scene-speed-badge">${speedLabel(speed)}</span>
@@ -791,7 +793,7 @@ function renderDynamicSceneCard(scene) {
         ${(scene.palette || []).map(p => `<span class="anim-palette-dot" style="background:${escapeHtml(p.hex)}"></span>`).join('')}
       </div>
       <div class="anim-scene-actions">
-        <button class="anim-play-btn" data-scene-id="${escapeHtml(scene.sceneId)}" data-speed="${scene.speed || 0.5}">▶ Play</button>
+        <button class="anim-play-btn${isPlaying ? ' is-playing' : ''}" data-scene-id="${escapeHtml(scene.sceneId)}" data-speed="${scene.speed || 0.5}">${isPlaying ? '● Looping' : '▶ Play'}</button>
         <button class="anim-stop-btn" data-scene-id="${escapeHtml(scene.sceneId)}">■ Stop</button>
         <button class="anim-delete-scene-btn" data-scene-id="${escapeHtml(scene.sceneId)}" title="Delete">×</button>
       </div>
@@ -872,7 +874,7 @@ async function initAnimationSection() {
   // Dynamic scene list — play / stop / delete
   const scenesList = document.getElementById('anim-dynamic-scenes-list');
   scenesList.addEventListener('click', async (e) => {
-    // Play
+    // Play — starts looping animation on bridge; stays in "Looping" state until stopped
     const playBtn = e.target.closest('.anim-play-btn');
     if (playBtn) {
       const sceneId = playBtn.dataset.sceneId;
@@ -886,17 +888,18 @@ async function initAnimationSection() {
           body: JSON.stringify({ action: 'dynamic_palette', speed })
         });
         const data = await res.json();
-        if (!data.success) throw new Error((data.errors?.[0]?.description) || 'Failed');
-        playBtn.textContent = '▶ Playing';
-        setTimeout(() => { playBtn.textContent = '▶ Play'; playBtn.disabled = false; }, 2000);
+        if (!data.success) throw new Error(data.error || (data.errors?.[0]?.description) || 'Failed');
+        activeDynamicSceneId = sceneId;
+        renderDynamicScenesList(); // re-render all cards to show looping state
       } catch (err) {
-        playBtn.textContent = 'Error';
-        setTimeout(() => { playBtn.textContent = '▶ Play'; playBtn.disabled = false; }, 2000);
+        console.error('Play error:', err.message);
+        playBtn.textContent = '▶ Play';
+        playBtn.disabled = false;
       }
       return;
     }
 
-    // Stop
+    // Stop — recalls scene statically, clearing the loop
     const stopBtn = e.target.closest('.anim-stop-btn');
     if (stopBtn) {
       const sceneId = stopBtn.dataset.sceneId;
@@ -907,6 +910,10 @@ async function initAnimationSection() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'active' })
         });
+        if (activeDynamicSceneId === sceneId) {
+          activeDynamicSceneId = null;
+          renderDynamicScenesList();
+        }
       } catch (err) {
         console.error('Stop error:', err.message);
       } finally {
