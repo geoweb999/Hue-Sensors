@@ -831,7 +831,7 @@ async function initAnimationSection() {
   } catch (err) {
     console.warn('Hue v2 API not available for this room:', err.message);
     if (animSection) {
-      animSection.querySelector('p.anim-section-hint').textContent = 'Animation effects require Hue Bridge firmware 1.50+.';
+      animSection.querySelector('p.anim-section-hint').textContent = `Animation effects unavailable: ${err.message}`;
       animSection.querySelector('#anim-room-effects').style.display = 'none';
       animSection.querySelector('.anim-builder').style.display = 'none';
     }

@@ -382,11 +382,22 @@ async function resolveV2Ids(v1GroupId) {
     hueClient.v2GetLights()
   ]);
 
+  // Log unexpected bridge responses (e.g. auth errors return {errors:[...]} with no .data)
+  if (!roomsResp.data) {
+    console.error('[v2] v2GetRooms unexpected response:', JSON.stringify(roomsResp));
+  }
+  if (!lightsResp.data) {
+    console.error('[v2] v2GetLights unexpected response:', JSON.stringify(lightsResp));
+  }
+
   const rooms = roomsResp.data || [];
   const lights = lightsResp.data || [];
 
   const room = rooms.find(r => r.id_v1 === `/groups/${v1GroupId}`);
-  if (!room) throw new Error(`No v2 room found for group ${v1GroupId}`);
+  if (!room) {
+    console.error(`[v2] No room found for /groups/${v1GroupId}. Available id_v1 values:`, rooms.map(r => r.id_v1));
+    throw new Error(`No v2 room found for group ${v1GroupId}`);
+  }
 
   const glService = (room.services || []).find(s => s.rtype === 'grouped_light');
   if (!glService) throw new Error(`No grouped_light for room ${room.id}`);
@@ -410,6 +421,7 @@ router.get('/v2/rooms/:groupId/info', async (req, res) => {
     const ids = await resolveV2Ids(groupId);
     res.json({ success: true, ...ids });
   } catch (error) {
+    console.error('[v2] /info route error for group', req.params.groupId + ':', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
