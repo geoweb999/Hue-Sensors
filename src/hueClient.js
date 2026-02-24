@@ -69,6 +69,58 @@ class HueClient {
     );
   }
 
+  async setGroupState(groupId, stateObj) {
+    return this._request(
+      `/api/${this.apiToken}/groups/${groupId}/action`,
+      'PUT',
+      stateObj
+    );
+  }
+
+  async getScenes() {
+    return this._request(`/api/${this.apiToken}/scenes`);
+  }
+
+  async getSchedules() {
+    return this._request(`/api/${this.apiToken}/schedules`);
+  }
+
+  async getRules() {
+    return this._request(`/api/${this.apiToken}/rules`);
+  }
+
+  async createScene(name, groupId, lightIds) {
+    const result = await this._request(
+      `/api/${this.apiToken}/scenes`,
+      'POST',
+      { name, lights: lightIds, type: 'GroupScene', group: groupId, recycle: false }
+    );
+    const idEntry = (Array.isArray(result) ? result : []).find(r => r.success?.id);
+    if (!idEntry) throw new Error('Failed to create scene');
+    const sceneId = idEntry.success.id;
+    await this._request(
+      `/api/${this.apiToken}/scenes/${sceneId}`,
+      'PUT',
+      { storelightstate: true }
+    );
+    return sceneId;
+  }
+
+  async activateScene(groupId, sceneId) {
+    return this._request(
+      `/api/${this.apiToken}/groups/${groupId}/action`,
+      'PUT',
+      { scene: sceneId }
+    );
+  }
+
+  async deleteScene(sceneId) {
+    return this._request(
+      `/api/${this.apiToken}/scenes/${sceneId}`,
+      'DELETE'
+    );
+  }
+
   async getRoomData() {
     try {
       const sensors = await this.getSensors();

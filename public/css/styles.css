@@ -163,6 +163,28 @@ main {
   margin-bottom: 1rem;
 }
 
+.room-header-link {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  margin: -0.25rem -0.5rem 0.75rem;
+  transition: background 0.15s ease;
+}
+
+.room-header-link:hover {
+  background: rgba(102, 126, 234, 0.08);
+}
+
+.room-detail-arrow {
+  margin-left: auto;
+  font-size: 1.4rem;
+  color: #667eea;
+  opacity: 0.7;
+  line-height: 1;
+}
+
 .room-name {
   font-size: 1.3rem;
   font-weight: 600;
@@ -1149,5 +1171,558 @@ body[data-theme="dark"] {
     min-width: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
+  }
+}
+
+/* ── Room Detail Page ──────────────────────────────────────────── */
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: 2px solid #667eea;
+  color: #667eea;
+  border-radius: 8px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+}
+
+.back-btn:hover {
+  background: #667eea;
+  color: white;
+}
+
+/* Room brightness bar (room page) */
+.room-page-brightness {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 12px;
+  padding: 1rem 1.5rem;
+  margin: 0 auto 1.5rem;
+  max-width: 1200px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.room-page-brightness label {
+  font-size: 0.9rem;
+  color: #666;
+  white-space: nowrap;
+}
+
+.room-page-brightness .room-bri-value {
+  font-weight: 600;
+  color: #667eea;
+}
+
+.room-page-brightness input[type="range"] {
+  flex: 1;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #e0e0e0;
+  border-radius: 3px;
+  outline: none;
+}
+
+.room-page-brightness input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #667eea;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.4);
+}
+
+/* Section containers */
+.room-section {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 16px;
+  padding: 1.5rem;
+  margin: 0 auto 1.5rem;
+  max-width: 1200px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+.room-section h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #333;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 2px solid #f0f0f0;
+}
+
+/* Lights grid for room page */
+.room-lights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.room-light-card {
+  background: #f8f8fb;
+  border-radius: 12px;
+  padding: 1rem;
+  border: 2px solid transparent;
+  transition: border-color 0.2s ease;
+}
+
+.room-light-card.light-on {
+  border-color: rgba(102, 126, 234, 0.3);
+}
+
+.room-light-card.light-unreachable {
+  opacity: 0.5;
+}
+
+.room-light-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.room-light-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.room-light-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #333;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-light-toggle {
+  flex-shrink: 0;
+}
+
+.room-light-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.room-light-controls.controls-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.room-light-controls label {
+  font-size: 0.78rem;
+  color: #666;
+  margin-bottom: 0.15rem;
+  display: block;
+}
+
+.room-light-controls input[type="range"] {
+  width: 100%;
+  height: 5px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #ddd;
+  border-radius: 3px;
+  outline: none;
+}
+
+.room-light-controls input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #667eea;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(102, 126, 234, 0.4);
+}
+
+.room-light-controls input[type="color"] {
+  width: 100%;
+  height: 36px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 2px;
+  cursor: pointer;
+  background: none;
+}
+
+.ct-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ct-row input[type="range"] {
+  flex: 1;
+}
+
+.ct-label-cool,
+.ct-label-warm {
+  font-size: 0.7rem;
+  color: #999;
+  white-space: nowrap;
+}
+
+/* Scenes grid */
+.scenes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.scene-card {
+  background: #f0f0f8;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 2px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.scene-card:hover {
+  border-color: #667eea;
+  background: #ebebf8;
+}
+
+.scene-card-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-card-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.scene-activate-btn {
+  flex: 1;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.scene-activate-btn:hover {
+  background: #5568d3;
+}
+
+.scene-delete-btn {
+  background: none;
+  border: 1px solid #e0e0e0;
+  color: #999;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scene-delete-btn:hover {
+  border-color: #e74c3c;
+  color: #e74c3c;
+}
+
+/* Save scene form */
+.save-scene-form {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #f0f0f0;
+}
+
+.save-scene-input {
+  flex: 1;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.save-scene-input:focus {
+  border-color: #667eea;
+}
+
+.save-scene-btn {
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  white-space: nowrap;
+}
+
+.save-scene-btn:hover {
+  background: #5568d3;
+}
+
+.save-scene-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Automations list */
+.automations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.automation-item {
+  background: #f8f8fb;
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.automation-item-info {
+  flex: 1;
+}
+
+.automation-item-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #333;
+}
+
+.automation-item-detail {
+  font-size: 0.8rem;
+  color: #777;
+  margin-top: 0.2rem;
+}
+
+.automation-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.2rem 0.5rem;
+  border-radius: 20px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.badge-schedule {
+  background: rgba(102, 126, 234, 0.15);
+  color: #667eea;
+}
+
+.badge-rule {
+  background: rgba(118, 75, 162, 0.15);
+  color: #764ba2;
+}
+
+.badge-enabled {
+  background: rgba(39, 174, 96, 0.15);
+  color: #27ae60;
+}
+
+.badge-disabled {
+  background: rgba(150, 150, 150, 0.15);
+  color: #999;
+}
+
+.no-items-msg {
+  color: #aaa;
+  font-size: 0.9rem;
+  font-style: italic;
+  text-align: center;
+  padding: 1rem 0;
+}
+
+/* ── Room Page Dark Mode ─────────────────────────────────────────── */
+
+[data-theme="dark"] .back-btn {
+  border-color: #8b9cf7;
+  color: #8b9cf7;
+}
+
+[data-theme="dark"] .back-btn:hover {
+  background: #8b9cf7;
+  color: #1a1a2e;
+}
+
+[data-theme="dark"] .room-page-brightness {
+  background: rgba(30, 30, 50, 0.95);
+}
+
+[data-theme="dark"] .room-page-brightness label {
+  color: #999;
+}
+
+[data-theme="dark"] .room-page-brightness .room-bri-value {
+  color: #8b9cf7;
+}
+
+[data-theme="dark"] .room-page-brightness input[type="range"] {
+  background: #444;
+}
+
+[data-theme="dark"] .room-section {
+  background: rgba(30, 30, 50, 0.95);
+}
+
+[data-theme="dark"] .room-section h2 {
+  color: #e0e0e0;
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .room-light-card {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .room-light-card.light-on {
+  border-color: rgba(139, 156, 247, 0.3);
+}
+
+[data-theme="dark"] .room-light-name {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .room-light-controls label {
+  color: #999;
+}
+
+[data-theme="dark"] .room-light-controls input[type="range"] {
+  background: #444;
+}
+
+[data-theme="dark"] .room-light-controls input[type="range"]::-webkit-slider-thumb {
+  background: #8b9cf7;
+}
+
+[data-theme="dark"] .room-light-controls input[type="color"] {
+  border-color: #444;
+  background: rgba(255,255,255,0.05);
+}
+
+[data-theme="dark"] .scene-card {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+[data-theme="dark"] .scene-card:hover {
+  background: rgba(139, 156, 247, 0.12);
+  border-color: #8b9cf7;
+}
+
+[data-theme="dark"] .scene-card-name {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .scene-activate-btn {
+  background: #8b9cf7;
+  color: #1a1a2e;
+}
+
+[data-theme="dark"] .scene-delete-btn {
+  border-color: #444;
+  color: #888;
+}
+
+[data-theme="dark"] .save-scene-form {
+  border-top-color: rgba(255,255,255,0.1);
+}
+
+[data-theme="dark"] .save-scene-input {
+  background: rgba(255,255,255,0.06);
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .save-scene-input:focus {
+  border-color: #8b9cf7;
+}
+
+[data-theme="dark"] .save-scene-btn {
+  background: #8b9cf7;
+  color: #1a1a2e;
+}
+
+[data-theme="dark"] .automation-item {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .automation-item-name {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .automation-item-detail {
+  color: #888;
+}
+
+[data-theme="dark"] .room-header-link:hover {
+  background: rgba(139, 156, 247, 0.1);
+}
+
+[data-theme="dark"] .room-detail-arrow {
+  color: #8b9cf7;
+}
+
+/* ── Room Page Responsive ────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .room-lights-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .scenes-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .room-page-brightness {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .save-scene-form {
+    flex-direction: column;
+  }
+
+  .automation-item {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .room-lights-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scenes-grid {
+    grid-template-columns: 1fr;
   }
 }

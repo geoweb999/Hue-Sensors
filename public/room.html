@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Room Detail — Hue Dashboard</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header>
+    <div class="header-content">
+      <div style="display:flex;align-items:center;gap:1rem;">
+        <a href="/lights.html" class="back-btn" id="back-btn">&#8249; Lights</a>
+        <h1 id="room-title">Room</h1>
+      </div>
+      <nav class="main-nav">
+        <a href="/" class="nav-link">Temperature</a>
+        <a href="/lights.html" class="nav-link">Lights</a>
+      </nav>
+      <div class="header-actions">
+        <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle dark mode">
+          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="status-bar">
+      <div id="status-indicator" class="status-indicator">
+        <span class="status-dot"></span>
+        <span id="status-text">Connecting...</span>
+      </div>
+      <div id="last-update">Last update: --</div>
+    </div>
+  </header>
+
+  <main>
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Loading room data...</p>
+    </div>
+
+    <div id="error" class="error hidden">
+      <p id="error-message"></p>
+    </div>
+
+    <!-- Room brightness bar -->
+    <div id="room-page-brightness" class="room-page-brightness hidden">
+      <label>All Lights Brightness: <span id="room-bri-value" class="room-bri-value">--</span></label>
+      <input type="range" id="room-bri-slider" min="1" max="254" value="254">
+    </div>
+
+    <!-- Lights section -->
+    <div id="lights-section" class="room-section hidden">
+      <h2>Lights</h2>
+      <div id="lights-grid" class="room-lights-grid"></div>
+    </div>
+
+    <!-- Scenes section -->
+    <div id="scenes-section" class="room-section hidden">
+      <h2>Scenes</h2>
+      <div id="scenes-grid" class="scenes-grid"></div>
+      <div class="save-scene-form">
+        <input type="text" id="save-scene-input" class="save-scene-input" placeholder="New scene name..." maxlength="32">
+        <button id="save-scene-btn" class="save-scene-btn">Save Current</button>
+      </div>
+    </div>
+
+    <!-- Automations section -->
+    <div id="automations-section" class="room-section hidden">
+      <h2>Automations</h2>
+      <div id="automations-list" class="automations-list"></div>
+    </div>
+  </main>
+
+  <footer>
+    <p>Room data refreshes every 10 seconds | v1.2</p>
+  </footer>
+
+  <script src="/js/theme.js"></script>
+  <script src="/js/room.js"></script>
+</body>
+</html>

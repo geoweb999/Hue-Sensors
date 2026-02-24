@@ -254,9 +254,10 @@ function renderRooms(rooms) {
     }
 
     card.innerHTML = `
-      <div class="room-header">
+      <div class="room-header room-header-link" data-room-id="${room.id}" title="Open ${escapeHtml(room.name)} detail">
         <div class="room-name">${escapeHtml(room.name)}</div>
         <span class="room-light-count">${onCount}/${totalCount} on</span>
+        <span class="room-detail-arrow">&#8250;</span>
       </div>
       <div class="room-brightness-control">
         <label>Room Brightness: <span class="room-bri-value">${avgPercent}%</span></label>
@@ -516,6 +517,20 @@ function initLightControlModal() {
   });
 }
 
+// ── Room Header Navigation ────────────────────────────────────────
+
+function initRoomHeaderNavigation() {
+  const container = document.getElementById('rooms-container');
+  container.addEventListener('click', (e) => {
+    const header = e.target.closest('.room-header-link');
+    if (!header) return;
+    // Don't navigate if click was on a slider inside the header (shouldn't be, but guard)
+    if (e.target.closest('input')) return;
+    const roomId = header.dataset.roomId;
+    if (roomId) window.location.href = `/room.html?id=${roomId}`;
+  });
+}
+
 // ── Room Brightness Slider ───────────────────────────────────────
 
 function initRoomBrightnessSliders() {
@@ -601,6 +616,7 @@ async function sendRoomBrightness(roomId, bri) {
 async function init() {
   initLightControlModal();
   initRoomBrightnessSliders();
+  initRoomHeaderNavigation();
   await fetchAndRenderLights();
   refreshIntervalId = setInterval(fetchAndRenderLights, REFRESH_INTERVAL);
 }
