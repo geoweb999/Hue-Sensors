@@ -261,7 +261,10 @@ function renderRooms(rooms) {
       </div>
       <div class="room-brightness-control">
         <label>Room Brightness: <span class="room-bri-value">${avgPercent}%</span></label>
-        <input type="range" class="room-brightness-slider" min="1" max="254" value="${avgBri || 1}" data-room-id="${room.id}">
+        <div class="room-bri-row">
+          <input type="range" class="room-brightness-slider" min="1" max="254" value="${avgBri || 1}" data-room-id="${room.id}">
+          <button class="room-all-off-btn" data-room-id="${room.id}" title="Turn all lights off">Off</button>
+        </div>
       </div>
       <div class="lights-grid">
         ${room.lights.map(light => renderLight(light)).join('')}
@@ -573,6 +576,23 @@ function initRoomBrightnessSliders() {
     if (!slider) return;
     const roomId = slider.dataset.roomId;
     setTimeout(() => { roomSliderActive[roomId] = false; }, 500);
+  });
+
+  // All Off button
+  container.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.room-all-off-btn');
+    if (!btn) return;
+    const roomId = btn.dataset.roomId;
+    btn.disabled = true;
+    try {
+      await fetch(`/api/rooms/${roomId}/state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on: false })
+      });
+    } finally {
+      btn.disabled = false;
+    }
   });
 }
 

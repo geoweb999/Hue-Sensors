@@ -758,6 +758,16 @@ footer {
   color: #667eea;
 }
 
+.room-bri-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.room-brightness-control .room-bri-row input[type="range"] {
+  flex: 1;
+}
+
 .room-brightness-control input[type="range"] {
   width: 100%;
   height: 6px;
@@ -1221,6 +1231,37 @@ body[data-theme="dark"] {
   color: #667eea;
 }
 
+.room-bri-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+}
+
+.room-all-off-btn {
+  background: none;
+  border: 2px solid #e74c3c;
+  color: #e74c3c;
+  border-radius: 8px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.room-all-off-btn:hover {
+  background: #e74c3c;
+  color: white;
+}
+
+.room-all-off-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .room-page-brightness input[type="range"] {
   flex: 1;
   height: 6px;
@@ -1588,6 +1629,16 @@ body[data-theme="dark"] {
 
 [data-theme="dark"] .room-page-brightness input[type="range"] {
   background: #444;
+}
+
+[data-theme="dark"] .room-all-off-btn {
+  border-color: #e74c3c;
+  color: #e74c3c;
+}
+
+[data-theme="dark"] .room-all-off-btn:hover {
+  background: #e74c3c;
+  color: white;
 }
 
 [data-theme="dark"] .room-section {

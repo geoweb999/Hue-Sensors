@@ -598,6 +598,21 @@ function initRoomBrightness() {
   slider.addEventListener('change', () => {
     setTimeout(() => { roomBriSliderActive = false; }, 600);
   });
+
+  const offBtn = document.getElementById('room-all-off-btn');
+  offBtn.addEventListener('click', async () => {
+    offBtn.disabled = true;
+    try {
+      await fetch(`/api/rooms/${roomId}/state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on: false })
+      });
+      setTimeout(fetchAndRenderRoom, 600);
+    } finally {
+      offBtn.disabled = false;
+    }
+  });
 }
 
 async function sendRoomBrightness(bri) {
