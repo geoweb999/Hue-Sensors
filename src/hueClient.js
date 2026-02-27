@@ -1,5 +1,6 @@
 import https from 'https';
 import { config } from './config.js';
+import { logger } from './logger.js';
 
 class HueClient {
   constructor() {
@@ -7,8 +8,21 @@ class HueClient {
     this.apiToken = config.HUE_API_TOKEN;
   }
 
+  _sanitizePath(path) {
+    if (!this.apiToken || !path) return path;
+    return String(path).split(this.apiToken).join('[REDACTED]');
+  }
+
   _request(path, method = 'GET', body = null) {
     return new Promise((resolve, reject) => {
+      const startedAt = Date.now();
+      const safePath = this._sanitizePath(path);
+      logger.debug('HUE_REQUEST', 'Hue v1 request started', {
+        apiVersion: 'v1',
+        method,
+        path: safePath
+      });
+
       const options = {
         hostname: this.bridgeIp,
         port: 443,
@@ -29,16 +43,44 @@ class HueClient {
         });
 
         res.on('end', () => {
+          const durationMs = Date.now() - startedAt;
           try {
             const parsed = JSON.parse(data);
+            const responseFields = {
+              apiVersion: 'v1',
+              method,
+              path: safePath,
+              status: res.statusCode,
+              durationMs
+            };
+            if ((res.statusCode || 0) >= 400) {
+              logger.warn('HUE_RESPONSE', 'Hue v1 response returned error status', responseFields);
+            } else {
+              logger.debug('HUE_RESPONSE', 'Hue v1 response received', responseFields);
+            }
             resolve(parsed);
           } catch (error) {
+            logger.error('HUE_ERROR', 'Failed to parse Hue v1 response', {
+              apiVersion: 'v1',
+              method,
+              path: safePath,
+              status: res.statusCode,
+              durationMs,
+              error
+            });
             reject(new Error(`Failed to parse Hue API response: ${error.message}`));
           }
         });
       });
 
       req.on('error', (error) => {
+        logger.error('HUE_ERROR', 'Failed to connect to Hue bridge (v1)', {
+          apiVersion: 'v1',
+          method,
+          path: safePath,
+          durationMs: Date.now() - startedAt,
+          error
+        });
         reject(new Error(`Failed to connect to Hue Bridge: ${error.message}`));
       });
 
@@ -52,13 +94,21 @@ class HueClient {
   // Hue CLIP API v2 — uses hue-application-key header, /clip/v2/resource/ base path
   _v2Request(path, method = 'GET', body = null) {
     return new Promise((resolve, reject) => {
+      const startedAt = Date.now();
       const headers = { 'hue-application-key': this.apiToken };
       if (body) headers['Content-Type'] = 'application/json';
+      const resourcePath = `/clip/v2/resource${path}`;
+      const safePath = this._sanitizePath(resourcePath);
+      logger.debug('HUE_REQUEST', 'Hue v2 request started', {
+        apiVersion: 'v2',
+        method,
+        path: safePath
+      });
 
       const options = {
         hostname: this.bridgeIp,
         port: 443,
-        path: `/clip/v2/resource${path}`,
+        path: resourcePath,
         method,
         rejectUnauthorized: false,
         headers
@@ -68,15 +118,44 @@ class HueClient {
         let data = '';
         res.on('data', (chunk) => { data += chunk; });
         res.on('end', () => {
+          const durationMs = Date.now() - startedAt;
           try {
-            resolve(JSON.parse(data));
+            const parsed = JSON.parse(data);
+            const responseFields = {
+              apiVersion: 'v2',
+              method,
+              path: safePath,
+              status: res.statusCode,
+              durationMs
+            };
+            if ((res.statusCode || 0) >= 400) {
+              logger.warn('HUE_RESPONSE', 'Hue v2 response returned error status', responseFields);
+            } else {
+              logger.debug('HUE_RESPONSE', 'Hue v2 response received', responseFields);
+            }
+            resolve(parsed);
           } catch (error) {
+            logger.error('HUE_ERROR', 'Failed to parse Hue v2 response', {
+              apiVersion: 'v2',
+              method,
+              path: safePath,
+              status: res.statusCode,
+              durationMs,
+              error
+            });
             reject(new Error(`Failed to parse Hue v2 API response: ${error.message}`));
           }
         });
       });
 
       req.on('error', (error) => {
+        logger.error('HUE_ERROR', 'Failed to connect to Hue bridge (v2)', {
+          apiVersion: 'v2',
+          method,
+          path: safePath,
+          durationMs: Date.now() - startedAt,
+          error
+        });
         reject(new Error(`Failed to connect to Hue Bridge (v2): ${error.message}`));
       });
 

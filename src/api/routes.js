@@ -2,8 +2,17 @@ import express from 'express';
 import { dataStore } from '../dataStore.js';
 import { getDatabase } from '../database.js';
 import { hueClient } from '../hueClient.js';
+import { logger } from '../logger.js';
 
 const router = express.Router();
+
+function requestContext(req) {
+  return {
+    requestId: req.requestId,
+    method: req.method,
+    route: req.originalUrl
+  };
+}
 
 // GET /api/rooms - Get all rooms with current temperatures
 router.get('/rooms', (req, res) => {
@@ -250,18 +259,38 @@ router.post('/rooms/:groupId/scenes', async (req, res) => {
     const { groupId } = req.params;
     const { name } = req.body;
     if (!name || !name.trim()) {
+      logger.warn('SCENE_CREATE_REJECTED', 'Scene create rejected due to missing name', {
+        ...requestContext(req),
+        groupId
+      });
       return res.status(400).json({ success: false, error: 'Scene name is required' });
     }
 
     const groupsData = await hueClient.getGroups();
     const group = groupsData[groupId];
     if (!group || group.type !== 'Room') {
+      logger.warn('SCENE_CREATE_REJECTED', 'Scene create rejected because room was not found', {
+        ...requestContext(req),
+        groupId
+      });
       return res.status(404).json({ success: false, error: 'Room not found' });
     }
 
     const sceneId = await hueClient.createScene(name.trim(), groupId, group.lights || []);
+    logger.info('SCENE_CREATE', 'Scene created', {
+      ...requestContext(req),
+      groupId,
+      sceneId,
+      name: name.trim(),
+      lightCount: (group.lights || []).length
+    });
     res.json({ success: true, sceneId });
   } catch (error) {
+    logger.error('SCENE_CREATE_ERROR', 'Failed to create scene', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      error
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -272,15 +301,36 @@ router.put('/rooms/:groupId/scene', async (req, res) => {
     const { groupId } = req.params;
     const { sceneId } = req.body;
     if (!sceneId) {
+      logger.warn('SCENE_ACTIVATE_REJECTED', 'Scene activation rejected due to missing sceneId', {
+        ...requestContext(req),
+        groupId
+      });
       return res.status(400).json({ success: false, error: 'sceneId is required' });
     }
     const result = await hueClient.activateScene(groupId, sceneId);
     const errors = (Array.isArray(result) ? result : []).filter(r => r.error);
     if (errors.length > 0) {
+      logger.warn('SCENE_ACTIVATE_REJECTED', 'Scene activation returned bridge errors', {
+        ...requestContext(req),
+        groupId,
+        sceneId,
+        errorCount: errors.length
+      });
       return res.status(400).json({ success: false, errors: errors.map(e => e.error) });
     }
+    logger.info('SCENE_ACTIVATE', 'Scene activated', {
+      ...requestContext(req),
+      groupId,
+      sceneId
+    });
     res.json({ success: true, result });
   } catch (error) {
+    logger.error('SCENE_ACTIVATE_ERROR', 'Failed to activate scene', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      sceneId: req.body?.sceneId,
+      error
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -292,10 +342,24 @@ router.delete('/scenes/:sceneId', async (req, res) => {
     const result = await hueClient.deleteScene(sceneId);
     const errors = (Array.isArray(result) ? result : []).filter(r => r.error);
     if (errors.length > 0) {
+      logger.warn('SCENE_DELETE_REJECTED', 'Scene deletion returned bridge errors', {
+        ...requestContext(req),
+        sceneId,
+        errorCount: errors.length
+      });
       return res.status(400).json({ success: false, errors: errors.map(e => e.error) });
     }
+    logger.info('SCENE_DELETE', 'Scene deleted', {
+      ...requestContext(req),
+      sceneId
+    });
     res.json({ success: true, result });
   } catch (error) {
+    logger.error('SCENE_DELETE_ERROR', 'Failed to delete scene', {
+      ...requestContext(req),
+      sceneId: req.params.sceneId,
+      error
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -311,15 +375,35 @@ router.put('/rooms/:groupId/state', async (req, res) => {
       if (allowedKeys.includes(key)) filtered[key] = stateObj[key];
     }
     if (Object.keys(filtered).length === 0) {
+      logger.warn('GROUP_STATE_REJECTED', 'Group state update rejected due to invalid payload', {
+        ...requestContext(req),
+        groupId
+      });
       return res.status(400).json({ success: false, error: 'No valid state properties provided' });
     }
     const result = await hueClient.setGroupState(groupId, filtered);
     const errors = (Array.isArray(result) ? result : []).filter(r => r.error);
     if (errors.length > 0) {
+      logger.warn('GROUP_STATE_REJECTED', 'Group state update returned bridge errors', {
+        ...requestContext(req),
+        groupId,
+        stateKeys: Object.keys(filtered),
+        errorCount: errors.length
+      });
       return res.status(400).json({ success: false, errors: errors.map(e => e.error) });
     }
+    logger.info('GROUP_STATE_SET', 'Group state updated', {
+      ...requestContext(req),
+      groupId,
+      stateKeys: Object.keys(filtered)
+    });
     res.json({ success: true, result });
   } catch (error) {
+    logger.error('GROUP_STATE_ERROR', 'Failed to set group state', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      error
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -340,6 +424,10 @@ router.put('/lights/:id/state', async (req, res) => {
     }
 
     if (Object.keys(filtered).length === 0) {
+      logger.warn('LIGHT_STATE_REJECTED', 'Light state update rejected due to invalid payload', {
+        ...requestContext(req),
+        lightId: id
+      });
       return res.status(400).json({ success: false, error: 'No valid state properties provided' });
     }
 
@@ -347,11 +435,27 @@ router.put('/lights/:id/state', async (req, res) => {
 
     const errors = (Array.isArray(result) ? result : []).filter(r => r.error);
     if (errors.length > 0) {
+      logger.warn('LIGHT_STATE_REJECTED', 'Light state update returned bridge errors', {
+        ...requestContext(req),
+        lightId: id,
+        stateKeys: Object.keys(filtered),
+        errorCount: errors.length
+      });
       return res.status(400).json({ success: false, errors: errors.map(e => e.error) });
     }
 
+    logger.info('LIGHT_STATE_SET', 'Light state updated', {
+      ...requestContext(req),
+      lightId: id,
+      stateKeys: Object.keys(filtered)
+    });
     res.json({ success: true, result });
   } catch (error) {
+    logger.error('LIGHT_STATE_ERROR', 'Failed to set light state', {
+      ...requestContext(req),
+      lightId: req.params.id,
+      error
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -384,10 +488,14 @@ async function resolveV2Ids(v1GroupId) {
 
   // Log unexpected bridge responses (e.g. auth errors return {errors:[...]} with no .data)
   if (!roomsResp.data) {
-    console.error('[v2] v2GetRooms unexpected response:', JSON.stringify(roomsResp));
+    logger.warn('V2_RESOLVE_IDS_UNEXPECTED_ROOMS', 'v2GetRooms returned unexpected payload', {
+      hasData: false
+    });
   }
   if (!lightsResp.data) {
-    console.error('[v2] v2GetLights unexpected response:', JSON.stringify(lightsResp));
+    logger.warn('V2_RESOLVE_IDS_UNEXPECTED_LIGHTS', 'v2GetLights returned unexpected payload', {
+      hasData: false
+    });
   }
 
   const rooms = roomsResp.data || [];
@@ -395,7 +503,10 @@ async function resolveV2Ids(v1GroupId) {
 
   const room = rooms.find(r => r.id_v1 === `/groups/${v1GroupId}`);
   if (!room) {
-    console.error(`[v2] No room found for /groups/${v1GroupId}. Available id_v1 values:`, rooms.map(r => r.id_v1));
+    logger.error('V2_ROOM_NOT_FOUND', 'No v2 room found for v1 group', {
+      groupId: v1GroupId,
+      availableRoomIds: rooms.map(r => r.id_v1)
+    });
     throw new Error(`No v2 room found for group ${v1GroupId}`);
   }
 
@@ -433,7 +544,11 @@ router.get('/v2/rooms/:groupId/info', async (req, res) => {
     const ids = await resolveV2Ids(groupId);
     res.json({ success: true, ...ids });
   } catch (error) {
-    console.error('[v2] /info route error for group', req.params.groupId + ':', error.message);
+    logger.error('V2_ROOM_INFO_ERROR', 'Failed to resolve v2 IDs for room', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      error
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -444,16 +559,45 @@ router.put('/v2/rooms/:groupId/effect', async (req, res) => {
   try {
     const { groupId } = req.params;
     const { effect } = req.body;
-    if (!effect) return res.status(400).json({ success: false, error: 'effect is required' });
+    if (!effect) {
+      logger.warn('V2_EFFECT_REJECTED', 'Room effect update rejected due to missing effect', {
+        ...requestContext(req),
+        targetType: 'room',
+        groupId
+      });
+      return res.status(400).json({ success: false, error: 'effect is required' });
+    }
 
     const { groupedLightId } = await resolveV2Ids(groupId);
     const result = await hueClient.v2SetRoomEffect(groupedLightId, effect);
     const errors = (result.errors || []);
     if (errors.length > 0) {
+      logger.warn('V2_EFFECT_REJECTED', 'Room effect update returned bridge errors', {
+        ...requestContext(req),
+        targetType: 'room',
+        groupId,
+        groupedLightId,
+        effect,
+        errorCount: errors.length
+      });
       return res.status(400).json({ success: false, errors });
     }
+    logger.info('V2_EFFECT_SET', 'Room effect updated', {
+      ...requestContext(req),
+      targetType: 'room',
+      groupId,
+      groupedLightId,
+      effect
+    });
     res.json({ success: true, result });
   } catch (error) {
+    logger.error('V2_EFFECT_ERROR', 'Failed to set room effect', {
+      ...requestContext(req),
+      targetType: 'room',
+      groupId: req.params.groupId,
+      effect: req.body?.effect,
+      error
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -464,15 +608,42 @@ router.put('/v2/lights/:v2LightId/effect', async (req, res) => {
   try {
     const { v2LightId } = req.params;
     const { effect } = req.body;
-    if (!effect) return res.status(400).json({ success: false, error: 'effect is required' });
+    if (!effect) {
+      logger.warn('V2_EFFECT_REJECTED', 'Light effect update rejected due to missing effect', {
+        ...requestContext(req),
+        targetType: 'light',
+        lightId: v2LightId
+      });
+      return res.status(400).json({ success: false, error: 'effect is required' });
+    }
 
     const result = await hueClient.v2SetLightEffect(v2LightId, effect);
     const errors = (result.errors || []);
     if (errors.length > 0) {
+      logger.warn('V2_EFFECT_REJECTED', 'Light effect update returned bridge errors', {
+        ...requestContext(req),
+        targetType: 'light',
+        lightId: v2LightId,
+        effect,
+        errorCount: errors.length
+      });
       return res.status(400).json({ success: false, errors });
     }
+    logger.info('V2_EFFECT_SET', 'Light effect updated', {
+      ...requestContext(req),
+      targetType: 'light',
+      lightId: v2LightId,
+      effect
+    });
     res.json({ success: true, result });
   } catch (error) {
+    logger.error('V2_EFFECT_ERROR', 'Failed to set light effect', {
+      ...requestContext(req),
+      targetType: 'light',
+      lightId: req.params.v2LightId,
+      effect: req.body?.effect,
+      error
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });

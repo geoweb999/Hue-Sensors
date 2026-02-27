@@ -138,6 +138,29 @@ public/
 | `SERVER_PORT` | Port for the web server | 3000 |
 | `NODE_ENV` | Environment mode | development |
 | `DB_PATH` | Path to SQLite database file | ./data/hue-sensors.db |
+| `LOG_LEVEL` | Minimum log level (`debug`, `info`, `warn`, `error`) | info |
+| `LOG_PRETTY` | Pretty-print logs (`true`/`false`) | false |
+| `SERVICE_NAME` | Service name included in each log entry | hue-temperature-tracker |
+
+### Logging
+
+The backend emits structured JSON logs for startup, polling, Hue bridge requests, API lifecycle events, and mutation actions.
+
+Example `.env` logging configuration:
+
+```env
+LOG_LEVEL=info
+LOG_PRETTY=false
+SERVICE_NAME=hue-temperature-tracker
+```
+
+Example log lines:
+
+```json
+{"ts":"2026-02-27T21:15:29.785Z","level":"info","event":"APP_START","msg":"Application startup initiated","service":"hue-temperature-tracker","env":"development","port":3000}
+{"ts":"2026-02-27T21:16:08.122Z","level":"info","event":"API_REQUEST_END","msg":"API request completed","service":"hue-temperature-tracker","env":"development","requestId":"f064cf2f-a9e0-4ca6-83f6-7a4283a3f116","method":"PUT","route":"/api/lights/3/state","status":200,"durationMs":98.71}
+{"ts":"2026-02-27T21:16:20.433Z","level":"error","event":"HUE_ERROR","msg":"Failed to connect to Hue bridge (v1)","service":"hue-temperature-tracker","env":"development","apiVersion":"v1","method":"GET","path":"/api/[REDACTED]/lights","durationMs":1002,"error":{"name":"Error","message":"connect ETIMEDOUT 10.0.18.144:443"}}
+```
 
 ### Runtime Settings
 

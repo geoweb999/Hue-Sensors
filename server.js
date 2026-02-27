@@ -1,4 +1,5 @@
 import express from 'express';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { config } from './src/config.js';
@@ -6,6 +7,7 @@ import { dataStore } from './src/dataStore.js';
 import { hueClient } from './src/hueClient.js';
 import apiRoutes from './src/api/routes.js';
 import { initializeDatabase } from './src/database.js';
+import { logger } from './src/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,30 +21,69 @@ let database = null;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+function apiRequestLogger(req, res, next) {
+  const requestId = randomUUID();
+  req.requestId = requestId;
+
+  const start = process.hrtime.bigint();
+  logger.info('API_REQUEST_START', 'API request started', {
+    requestId,
+    method: req.method,
+    route: req.originalUrl
+  });
+
+  res.on('finish', () => {
+    const durationMs = Number(process.hrtime.bigint() - start) / 1000000;
+    const fields = {
+      requestId,
+      method: req.method,
+      route: req.originalUrl,
+      status: res.statusCode,
+      durationMs: Number(durationMs.toFixed(2))
+    };
+
+    if (res.statusCode >= 500) {
+      logger.error('API_REQUEST_ERROR', 'API request failed', fields);
+      return;
+    }
+
+    logger.info('API_REQUEST_END', 'API request completed', fields);
+  });
+
+  next();
+}
+
 // API Routes
-app.use('/api', apiRoutes);
+app.use('/api', apiRequestLogger, apiRoutes);
 
 // Polling interval reference
 let pollingInterval;
 
 // Polling function
 async function pollHueBridge() {
+  const startedAt = Date.now();
   try {
-    console.log(`[${new Date().toISOString()}] Polling Hue Bridge...`);
+    logger.debug('POLL_START', 'Polling Hue bridge started');
     const roomData = await hueClient.getRoomData();
 
     if (roomData.length === 0) {
-      console.log('No temperature sensors found on Hue Bridge');
-    } else {
-      for (const room of roomData) {
-        dataStore.addReading(room.id, room.name, room.temperature, room.lux, room.motionDetected, room.lastMotion);
-        const luxStr = room.lux !== null ? ` | ${room.lux} lux` : '';
-        const motionStr = room.motionDetected ? ' | Motion: YES' : ' | Motion: no';
-        console.log(`  ${room.name}: ${room.temperature.toFixed(2)}°C${luxStr}${motionStr}`);
-      }
+      logger.warn('NO_TEMPERATURE_SENSORS', 'No temperature sensors found on Hue bridge');
     }
+
+    for (const room of roomData) {
+      dataStore.addReading(room.id, room.name, room.temperature, room.lux, room.motionDetected, room.lastMotion);
+    }
+
+    logger.info('POLL_SUCCESS', 'Polling Hue bridge completed', {
+      durationMs: Date.now() - startedAt,
+      roomCount: roomData.length,
+      readingsWritten: roomData.length
+    });
   } catch (error) {
-    console.error(`Polling error: ${error.message}`);
+    logger.error('POLL_FAILURE', 'Polling Hue bridge failed', {
+      durationMs: Date.now() - startedAt,
+      error
+    });
   }
 }
 
@@ -53,55 +94,63 @@ function startPolling() {
 
   // Then poll at the configured interval
   pollingInterval = setInterval(pollHueBridge, config.POLL_INTERVAL);
-  console.log(`Polling started (every ${config.POLL_INTERVAL / 1000} seconds)`);
+  logger.info('POLLING_STARTED', 'Polling service started', {
+    intervalSeconds: config.POLL_INTERVAL / 1000
+  });
 }
 
 // Initialize server with database
 async function startServer() {
   try {
-    console.log('='.repeat(50));
-    console.log('Hue Temperature Tracker');
-    console.log('='.repeat(50));
+    logger.info('APP_START', 'Application startup initiated', {
+      port: config.PORT,
+      pollIntervalMs: config.POLL_INTERVAL,
+      bridgeIp: config.HUE_BRIDGE_IP
+    });
 
     // 1. Initialize database
     const dbPath = config.DB_PATH || path.join(process.cwd(), 'data', 'hue-sensors.db');
-    console.log(`Initializing database at: ${dbPath}`);
+    logger.info('DB_INIT_START', 'Initializing database', { dbPath });
     database = initializeDatabase(dbPath);
+    logger.info('DB_INIT_SUCCESS', 'Database initialized', { dbPath });
 
     // 2. Connect dataStore to database
     dataStore.setDatabase(database);
 
     // 3. Load historical data from database
-    console.log('Loading historical data from database...');
+    logger.info('DATASTORE_LOAD_START', 'Loading historical data from database');
     dataStore.loadFromDatabase();
+    logger.info('DATASTORE_LOAD_SUCCESS', 'Loaded historical data from database');
 
     // 4. Get and display database statistics
     const stats = database.getStats();
-    console.log(`Database stats:`);
-    console.log(`  - Total readings: ${stats.totalReadings}`);
-    console.log(`  - Rooms: ${stats.roomCount}`);
-    console.log(`  - Database size: ${stats.dbSizeMB} MB`);
+    logger.info('DB_STATS', 'Database statistics loaded', {
+      totalReadings: stats.totalReadings,
+      roomCount: stats.roomCount,
+      dbSizeMB: stats.dbSizeMB
+    });
     if (stats.oldestReading && stats.newestReading) {
-      const oldestDate = new Date(stats.oldestReading);
-      const newestDate = new Date(stats.newestReading);
-      console.log(`  - Data range: ${oldestDate.toLocaleString()} to ${newestDate.toLocaleString()}`);
+      logger.info('DB_DATA_RANGE', 'Database data range loaded', {
+        oldestReading: stats.oldestReading,
+        newestReading: stats.newestReading
+      });
     }
 
     // 5. Start Express server
     app.listen(config.PORT, () => {
-      console.log('='.repeat(50));
-      console.log(`Server running on http://localhost:${config.PORT}`);
-      console.log(`Bridge IP: ${config.HUE_BRIDGE_IP}`);
-      console.log(`Poll interval: ${config.POLL_INTERVAL / 1000} seconds`);
-      console.log('='.repeat(50));
-      console.log('');
+      logger.info('APP_READY', 'Server listening', {
+        port: config.PORT,
+        url: `http://localhost:${config.PORT}`,
+        bridgeIp: config.HUE_BRIDGE_IP,
+        pollIntervalSeconds: config.POLL_INTERVAL / 1000
+      });
 
       // 6. Start polling
       startPolling();
     });
 
   } catch (error) {
-    console.error('Failed to start server:', error);
+    logger.error('APP_START_FAILURE', 'Failed to start server', { error });
     process.exit(1);
   }
 }
@@ -110,26 +159,27 @@ async function startServer() {
 startServer();
 
 // Graceful shutdown
-function shutdown() {
-  console.log('\n\nShutting down gracefully...');
+function shutdown(signal = 'unknown') {
+  logger.info('APP_SHUTDOWN', 'Shutting down gracefully', { signal });
 
   // Stop polling
   if (pollingInterval) {
     clearInterval(pollingInterval);
+    logger.info('POLLING_STOPPED', 'Polling service stopped');
   }
 
   // Close database connection
   if (database) {
     try {
       database.close();
-      console.log('Database connection closed');
+      logger.info('DB_CLOSED', 'Database connection closed');
     } catch (error) {
-      console.error('Error closing database:', error);
+      logger.error('DB_CLOSE_ERROR', 'Error closing database connection', { error });
     }
   }
 
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

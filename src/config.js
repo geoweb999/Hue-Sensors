@@ -8,7 +8,10 @@ export const config = {
   POLL_INTERVAL: parseInt(process.env.POLL_INTERVAL) || 60000,
   PORT: parseInt(process.env.SERVER_PORT) || 3000,
   NODE_ENV: process.env.NODE_ENV || 'development',
-  DB_PATH: process.env.DB_PATH || './data/hue-sensors.db'
+  DB_PATH: process.env.DB_PATH || './data/hue-sensors.db',
+  LOG_LEVEL: (process.env.LOG_LEVEL || 'info').toLowerCase(),
+  LOG_PRETTY: process.env.LOG_PRETTY === 'true',
+  SERVICE_NAME: process.env.SERVICE_NAME || 'hue-temperature-tracker'
 };
 
 // Validate required configuration
