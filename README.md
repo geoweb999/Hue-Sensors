@@ -141,10 +141,12 @@ public/
 | `LOG_LEVEL` | Minimum log level (`debug`, `info`, `warn`, `error`) | info |
 | `LOG_PRETTY` | Pretty-print logs (`true`/`false`) | false |
 | `SERVICE_NAME` | Service name included in each log entry | hue-temperature-tracker |
+| `EVENT_STREAM_ENABLED` | Enable Hue v2 event stream listener (`true`/`false`) | true |
 
 ### Logging
 
 The backend emits structured JSON logs for startup, polling, Hue bridge requests, API lifecycle events, and mutation actions.
+It also listens to the Hue Bridge v2 event stream (`/eventstream/clip/v2`) and logs real-time bridge events.
 
 Example `.env` logging configuration:
 
@@ -152,6 +154,7 @@ Example `.env` logging configuration:
 LOG_LEVEL=info
 LOG_PRETTY=false
 SERVICE_NAME=hue-temperature-tracker
+EVENT_STREAM_ENABLED=true
 ```
 
 Example log lines:

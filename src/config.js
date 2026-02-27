@@ -11,7 +11,8 @@ export const config = {
   DB_PATH: process.env.DB_PATH || './data/hue-sensors.db',
   LOG_LEVEL: (process.env.LOG_LEVEL || 'info').toLowerCase(),
   LOG_PRETTY: process.env.LOG_PRETTY === 'true',
-  SERVICE_NAME: process.env.SERVICE_NAME || 'hue-temperature-tracker'
+  SERVICE_NAME: process.env.SERVICE_NAME || 'hue-temperature-tracker',
+  EVENT_STREAM_ENABLED: process.env.EVENT_STREAM_ENABLED !== 'false'
 };
 
 // Validate required configuration

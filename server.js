@@ -8,6 +8,7 @@ import { hueClient } from './src/hueClient.js';
 import apiRoutes from './src/api/routes.js';
 import { initializeDatabase } from './src/database.js';
 import { logger } from './src/logger.js';
+import { startHueEventStream } from './src/hueEventStream.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,6 +59,7 @@ app.use('/api', apiRequestLogger, apiRoutes);
 
 // Polling interval reference
 let pollingInterval;
+let stopHueEventStream = null;
 
 // Polling function
 async function pollHueBridge() {
@@ -147,6 +149,13 @@ async function startServer() {
 
       // 6. Start polling
       startPolling();
+
+      // 7. Start Hue bridge event stream
+      if (config.EVENT_STREAM_ENABLED) {
+        stopHueEventStream = startHueEventStream();
+      } else {
+        logger.info('BRIDGE_EVENT_STREAM_DISABLED', 'Hue bridge event stream is disabled by config');
+      }
     });
 
   } catch (error) {
@@ -166,6 +175,12 @@ function shutdown(signal = 'unknown') {
   if (pollingInterval) {
     clearInterval(pollingInterval);
     logger.info('POLLING_STOPPED', 'Polling service stopped');
+  }
+
+  // Stop Hue bridge event stream
+  if (stopHueEventStream) {
+    stopHueEventStream();
+    stopHueEventStream = null;
   }
 
   // Close database connection
