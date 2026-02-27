@@ -8,6 +8,9 @@ let currentLightId = null;
 let sendTimeout = null;
 let roomSliderTimeouts = {};    // debounce timers per room
 let roomSliderActive = {};      // true while user is dragging a room slider
+let modalColorWheel = null;
+let listColorWheel = null;
+const lightColorTimeouts = {};
 
 // ── Color Conversion ─────────────────────────────────────────────
 
@@ -155,12 +158,54 @@ function getLightCssColor(light) {
   return '#ffeedd'; // fallback warm white
 }
 
+function getLightPickerHex(light) {
+  if (light.colormode === 'xy' && light.xy && light.xy.length === 2) {
+    const rgb = xyBriToRgb(light.xy[0], light.xy[1], light.brightness || 254);
+    return rgbToHex(rgb.r, rgb.g, rgb.b);
+  }
+  if (light.colormode === 'ct' && light.ct) {
+    const rgb = ctToRgb(light.ct);
+    return rgbToHex(rgb.r, rgb.g, rgb.b);
+  }
+  if (light.colormode === 'hs' && light.hue !== undefined && light.sat !== undefined) {
+    const h = (light.hue / 65535) * 360;
+    const s = light.sat / 254;
+    const v = (light.brightness || 254) / 254;
+    const c = v * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = v - c;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    if (h < 60) { r = c; g = x; }
+    else if (h < 120) { r = x; g = c; }
+    else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; }
+    else if (h < 300) { r = x; b = c; }
+    else { r = c; b = x; }
+    return rgbToHex(
+      Math.round((r + m) * 255),
+      Math.round((g + m) * 255),
+      Math.round((b + m) * 255)
+    );
+  }
+  return '#ffffff';
+}
+
 // ── Utility ──────────────────────────────────────────────────────
 
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function setColorPickerRingColor(picker, colorHex = null) {
+  if (!picker) return;
+  const control = picker.closest('.color-picker-control');
+  const ring = control ? control.querySelector('.color-picker-ring') : null;
+  if (!ring) return;
+  ring.style.setProperty('--picker-color', colorHex || picker.value || '#ffffff');
 }
 
 function updateStatus(status, text) {
@@ -199,17 +244,26 @@ function renderLight(light) {
   lightDataMap.set(light.id, light);
 
   const color = getLightCssColor(light);
+  const pickerHex = getLightPickerHex(light);
+  const colorCapable = isFullColorLight(light.type);
+  const swatchClickable = colorCapable && light.reachable;
   const brightnessPercent = Math.round((light.brightness / 254) * 100);
   const statusClass = light.on ? 'light-on' : 'light-off';
   const reachableClass = light.reachable ? '' : 'light-unreachable';
+  const swatchAttrs = swatchClickable
+    ? `tabindex="0" role="button" aria-label="Change ${escapeHtml(light.name)} color"`
+    : '';
 
   return `
     <div class="light-item ${statusClass} ${reachableClass}" data-light-id="${light.id}">
-      <div class="light-swatch" style="background: ${color}; --swatch-color: ${color};"></div>
+      <div class="light-swatch ${swatchClickable ? 'swatch-color-trigger' : ''}" ${swatchAttrs}
+        style="background: ${color}; --swatch-color: ${color};"></div>
       <div class="light-info">
         <span class="light-name">${escapeHtml(light.name)}</span>
         <span class="light-brightness">${light.on ? brightnessPercent + '%' : 'Off'}</span>
       </div>
+      ${colorCapable ? `<input type="color" class="light-card-color-picker color-picker-input-hidden"
+        value="${pickerHex}" data-light-id="${light.id}" ${!light.reachable ? 'disabled' : ''}>` : ''}
       ${!light.reachable ? '<span class="light-unreachable-badge">Unreachable</span>' : ''}
     </div>
   `;
@@ -328,6 +382,7 @@ function openLightModal(light) {
   currentLightId = light.id;
 
   const modal = document.getElementById('light-control-modal');
+  const colorPicker = document.getElementById('light-color-picker');
 
   // Title
   document.getElementById('light-modal-title').textContent = light.name;
@@ -354,8 +409,9 @@ function openLightModal(light) {
   // Populate color picker
   if (fullColor && light.xy && light.xy.length === 2) {
     const rgb = xyBriToRgb(light.xy[0], light.xy[1], 254);
-    document.getElementById('light-color-picker').value = rgbToHex(rgb.r, rgb.g, rgb.b);
+    colorPicker.value = rgbToHex(rgb.r, rgb.g, rgb.b);
   }
+  setColorPickerRingColor(colorPicker);
 
   // Populate CT slider
   if ((fullColor || ctOnly) && light.ct) {
@@ -371,6 +427,7 @@ function openLightModal(light) {
 }
 
 function closeModal() {
+  if (modalColorWheel) modalColorWheel.close();
   document.getElementById('light-control-modal').classList.remove('active');
   currentLightId = null;
   if (sendTimeout) clearTimeout(sendTimeout);
@@ -455,13 +512,47 @@ async function sendLightState(stateObj) {
   }
 }
 
+function debouncedSendCardColor(lightId, stateObj, delay = 100) {
+  if (lightColorTimeouts[lightId]) clearTimeout(lightColorTimeouts[lightId]);
+  lightColorTimeouts[lightId] = setTimeout(async () => {
+    try {
+      const response = await fetch(`/api/lights/${lightId}/state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stateObj)
+      });
+      const data = await response.json();
+      if (!data.success) {
+        console.error('Failed to set card light color:', data.error || data.errors);
+      }
+    } catch (error) {
+      console.error('Error setting card light color:', error);
+    }
+  }, delay);
+}
+
 function initLightControlModal() {
   const modal = document.getElementById('light-control-modal');
   const closeBtnEl = modal.querySelector('.close-btn');
   const powerToggle = document.getElementById('light-power-toggle');
   const brightnessSlider = document.getElementById('light-brightness-slider');
   const colorPicker = document.getElementById('light-color-picker');
+  const colorPickerTrigger = document.getElementById('light-color-picker-trigger');
   const ctSlider = document.getElementById('light-ct-slider');
+
+  setColorPickerRingColor(colorPicker);
+  modalColorWheel = typeof window.createCircleColorPicker === 'function'
+    ? window.createCircleColorPicker()
+    : null;
+  listColorWheel = typeof window.createCircleColorPicker === 'function'
+    ? window.createCircleColorPicker()
+    : null;
+
+  colorPickerTrigger.addEventListener('click', () => {
+    if (modalColorWheel) {
+      modalColorWheel.open(colorPickerTrigger, colorPicker);
+    }
+  });
 
   // Close handlers
   closeBtnEl.addEventListener('click', closeModal);
@@ -474,6 +565,16 @@ function initLightControlModal() {
 
   // Click on light item opens modal
   document.getElementById('rooms-container').addEventListener('click', (e) => {
+    const swatch = e.target.closest('.swatch-color-trigger');
+    if (swatch) {
+      const lightItem = swatch.closest('.light-item');
+      const picker = lightItem?.querySelector('.light-card-color-picker');
+      if (picker && !picker.disabled && listColorWheel) {
+        listColorWheel.open(swatch, picker);
+      }
+      return;
+    }
+
     const lightItem = e.target.closest('.light-item');
     if (!lightItem) return;
 
@@ -482,6 +583,53 @@ function initLightControlModal() {
     if (!light || !light.reachable) return;
 
     openLightModal(light);
+  });
+
+  document.getElementById('rooms-container').addEventListener('keydown', (e) => {
+    const swatch = e.target.closest('.swatch-color-trigger');
+    if (!swatch) return;
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    const lightItem = swatch.closest('.light-item');
+    const picker = lightItem?.querySelector('.light-card-color-picker');
+    if (picker && !picker.disabled && listColorWheel) {
+      listColorWheel.open(swatch, picker);
+    }
+  });
+
+  document.getElementById('rooms-container').addEventListener('input', (e) => {
+    const picker = e.target.closest('.light-card-color-picker');
+    if (!picker) return;
+
+    const lightId = picker.dataset.lightId;
+    const hex = picker.value;
+    const { r, g, b } = hexToRgb(hex);
+    const xy = rgbToXy(r, g, b);
+    const item = picker.closest('.light-item');
+    const swatch = item?.querySelector('.light-swatch');
+    if (swatch) {
+      swatch.style.background = hex;
+      swatch.style.setProperty('--swatch-color', hex);
+    }
+    if (item) {
+      item.classList.add('light-on');
+      item.classList.remove('light-off');
+      const briEl = item.querySelector('.light-brightness');
+      const light = lightDataMap.get(lightId);
+      if (briEl && light) {
+        const pct = Math.round((light.brightness / 254) * 100);
+        briEl.textContent = `${pct}%`;
+      }
+    }
+
+    const light = lightDataMap.get(lightId);
+    if (light) {
+      light.on = true;
+      light.xy = xy;
+      light.colormode = 'xy';
+    }
+
+    debouncedSendCardColor(lightId, { xy, on: true });
   });
 
   // Power toggle
@@ -507,6 +655,7 @@ function initLightControlModal() {
     const hex = colorPicker.value;
     const rgb = hexToRgb(hex);
     const xy = rgbToXy(rgb.r, rgb.g, rgb.b);
+    setColorPickerRingColor(colorPicker, hex);
     updatePreviewSwatch();
     debouncedSend({ xy });
   });

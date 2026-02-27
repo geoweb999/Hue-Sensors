@@ -76,8 +76,11 @@
         </div>
 
         <div id="color-group" class="setting-group" style="display: none;">
-          <label for="light-color-picker">Color</label>
-          <input type="color" id="light-color-picker" value="#ffffff">
+          <label for="light-color-picker-trigger">Color</label>
+          <div class="color-picker-control">
+            <button type="button" class="color-picker-ring" id="light-color-picker-trigger" aria-label="Choose color"></button>
+            <input type="color" id="light-color-picker" class="color-picker-input-hidden" value="#ffffff">
+          </div>
         </div>
 
         <div id="ct-group" class="setting-group" style="display: none;">
@@ -93,10 +96,11 @@
   </div>
 
   <footer>
-    <p>Light status refreshes every 5 seconds | v1.2</p>
+    <p>Light status refreshes every 5 seconds | v2.1</p>
   </footer>
 
   <script src="/js/theme.js"></script>
+  <script src="/js/color-wheel-picker.js"></script>
   <script src="/js/lights.js"></script>
 </body>
 </html>

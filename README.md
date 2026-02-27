@@ -491,7 +491,7 @@ MIT License - feel free to use this project for personal or commercial purposes.
   - Header layout wraps properly on narrow screens — title + buttons on row 1, nav on row 2
   - Compact header padding, smaller buttons, touch-friendly time range controls
   - Single-column card layout on screens ≤768px
-- **Version Display**: Footer shows v1.2 on both pages
+- **Version Display**: Footer shows v2.1 on both pages
 
 ### Version 1.1.0 (February 2026)
 - Added smart data sampling for optimal performance with large datasets

@@ -7,6 +7,7 @@ let roomId = null;
 let roomData = null;
 const lightInputActive = {};   // true while user is dragging/editing a light control
 const lightSendTimeouts = {};  // debounce timers per light
+let roomColorWheel = null;
 
 // Room brightness slider state
 let roomBriSliderActive = false;
@@ -170,6 +171,14 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function setColorPickerRingColor(picker, colorHex = null) {
+  if (!picker) return;
+  const control = picker.closest('.color-picker-control');
+  const ring = control ? control.querySelector('.color-picker-ring') : null;
+  if (!ring) return;
+  ring.style.setProperty('--picker-color', colorHex || picker.value || '#ffffff');
+}
+
 // ── Light type helpers ────────────────────────────────────────────
 
 function isColorLight(type) {
@@ -195,11 +204,8 @@ function renderLightCard(light) {
   const controlsDisabled = !light.on || unreachable;
 
   const colorHtml = isColorLight(light.type) ? `
-    <div class="ctrl-color">
-      <label>Color</label>
-      <input type="color" class="light-color-picker" value="${pickerHex}"
-        data-light-id="${light.id}" ${controlsDisabled ? 'disabled' : ''}>
-    </div>` : '';
+    <input type="color" class="light-color-picker color-picker-input-hidden" value="${pickerHex}"
+      data-light-id="${light.id}" ${controlsDisabled ? 'disabled' : ''}>` : '';
 
   const ctHtml = isCtLight(light.type) ? `
     <div class="ctrl-ct">
@@ -219,11 +225,18 @@ function renderLightCard(light) {
         value="${light.brightness || 1}" data-light-id="${light.id}" ${controlsDisabled ? 'disabled' : ''}>
     </div>` : '';
 
+  const swatchInteractive = isColorLight(light.type);
+  const swatchAttrs = swatchInteractive
+    ? `data-color-trigger="true" tabindex="${controlsDisabled ? -1 : 0}" role="button"
+       aria-label="Change ${escapeHtml(light.name)} color"`
+    : '';
+
   return `
     <div class="room-light-card ${light.on ? 'light-on' : ''} ${unreachable ? 'light-unreachable' : ''}"
          data-light-id="${light.id}">
       <div class="room-light-card-header">
-        <div class="room-light-swatch" style="background:${swatchColor};${light.on ? `box-shadow:0 0 10px 2px ${swatchColor}88` : ''}"></div>
+        <div class="room-light-swatch ${swatchInteractive ? 'swatch-color-trigger' : ''}" ${swatchAttrs}
+          style="background:${swatchColor};${light.on ? `box-shadow:0 0 10px 2px ${swatchColor}88` : ''}"></div>
         <div class="room-light-name" title="${escapeHtml(light.name)}">${escapeHtml(light.name)}</div>
         <label class="toggle-switch room-light-toggle">
           <input type="checkbox" class="light-power-toggle" data-light-id="${light.id}"
@@ -500,14 +513,37 @@ function setControlsDisabled(lightId, disabled) {
     } else {
       controls.classList.remove('controls-disabled');
     }
-    for (const input of controls.querySelectorAll('input')) {
-      input.disabled = disabled;
+    for (const control of controls.querySelectorAll('input, button')) {
+      control.disabled = disabled;
     }
   }
 }
 
 function initLightControls() {
   const grid = document.getElementById('lights-grid');
+  roomColorWheel = typeof window.createCircleColorPicker === 'function'
+    ? window.createCircleColorPicker()
+    : null;
+
+  grid.addEventListener('click', (e) => {
+    const swatch = e.target.closest('.swatch-color-trigger');
+    if (!swatch || !roomColorWheel) return;
+    const card = swatch.closest('.room-light-card');
+    const picker = card?.querySelector('.light-color-picker');
+    if (!picker || picker.disabled) return;
+    roomColorWheel.open(swatch, picker);
+  });
+
+  grid.addEventListener('keydown', (e) => {
+    const swatch = e.target.closest('.swatch-color-trigger');
+    if (!swatch || !roomColorWheel) return;
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    const card = swatch.closest('.room-light-card');
+    const picker = card?.querySelector('.light-color-picker');
+    if (!picker || picker.disabled) return;
+    roomColorWheel.open(swatch, picker);
+  });
 
   // Power toggle
   grid.addEventListener('change', async (e) => {
@@ -555,6 +591,7 @@ function initLightControls() {
     if (!picker) return;
     const lightId = picker.dataset.lightId;
     const hex = picker.value;
+    setColorPickerRingColor(picker, hex);
     const { r, g, b } = hexToRgb(hex);
     const xy = rgbToXy(r, g, b);
 
