@@ -3,6 +3,9 @@ const charts = {};
 
 // Per-room time range overrides (roomId -> range string)
 const roomTimeRanges = {};
+const roomTempOffsets = {};
+const currentRooms = new Map();
+const offsetChartRefreshTimeouts = {};
 
 // Settings with defaults
 let settings = {
@@ -19,6 +22,15 @@ let updateIntervalId = null;
 // Convert Celsius to Fahrenheit
 function celsiusToFahrenheit(celsius) {
   return (celsius * 9/5) + 32;
+}
+
+function getRoomTempOffset(roomId) {
+  const value = parseFloat(roomTempOffsets[roomId]);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function getAdjustedTempF(roomId, celsius) {
+  return celsiusToFahrenheit(celsius) + getRoomTempOffset(roomId);
 }
 
 // Sample readings by a specific time interval (in milliseconds)
@@ -140,6 +152,22 @@ function loadRoomTimeRanges() {
     try {
       const parsed = JSON.parse(saved);
       Object.assign(roomTimeRanges, parsed);
+    } catch (e) { /* ignore malformed data */ }
+  }
+}
+
+// Save per-room temperature offsets to localStorage (stored in Fahrenheit)
+function saveRoomTempOffsets() {
+  localStorage.setItem('hueRoomTempOffsets', JSON.stringify(roomTempOffsets));
+}
+
+// Load per-room temperature offsets from localStorage
+function loadRoomTempOffsets() {
+  const saved = localStorage.getItem('hueRoomTempOffsets');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      Object.assign(roomTempOffsets, parsed);
     } catch (e) { /* ignore malformed data */ }
   }
 }
@@ -281,6 +309,34 @@ function initTimeRangeHandlers() {
   });
 }
 
+function scheduleRoomChartRefresh(roomId) {
+  if (offsetChartRefreshTimeouts[roomId]) clearTimeout(offsetChartRefreshTimeouts[roomId]);
+  offsetChartRefreshTimeouts[roomId] = setTimeout(() => {
+    updateRoomChart(roomId);
+  }, 120);
+}
+
+function initTempOffsetHandlers() {
+  const roomsContainer = document.getElementById('rooms-container');
+
+  roomsContainer.addEventListener('input', (e) => {
+    const input = e.target.closest('.temp-offset-input');
+    if (!input) return;
+
+    const roomId = input.dataset.room;
+    let value = parseFloat(input.value);
+    if (!Number.isFinite(value)) value = 0;
+    value = Math.min(20, Math.max(-20, value));
+    roomTempOffsets[roomId] = value;
+    saveRoomTempOffsets();
+
+    const room = currentRooms.get(roomId);
+    const card = document.getElementById(`room-${roomId}`);
+    if (room && card) updateRoomCard(card, room);
+    scheduleRoomChartRefresh(roomId);
+  });
+}
+
 // Initialize the application
 async function init() {
   console.log('Initializing Hue Temperature Dashboard...');
@@ -290,6 +346,7 @@ async function init() {
 
   // Load per-room time range selections from localStorage
   loadRoomTimeRanges();
+  loadRoomTempOffsets();
 
   // Update footer with current settings
   updateFooter();
@@ -299,6 +356,7 @@ async function init() {
 
   // Initialize time range button handlers
   initTimeRangeHandlers();
+  initTempOffsetHandlers();
 
   // Load initial data
   await fetchAndRenderRooms();
@@ -330,6 +388,7 @@ async function fetchAndRenderRooms() {
 
     // Render or update each room
     for (const room of data.rooms) {
+      currentRooms.set(room.id, room);
       await renderRoom(room);
     }
 
@@ -363,7 +422,8 @@ function createRoomCard(room) {
   card.className = 'room-card';
   card.id = `room-${room.id}`;
 
-  const tempF = celsiusToFahrenheit(room.currentTemp);
+  const tempF = getAdjustedTempF(room.id, room.currentTemp);
+  const offset = getRoomTempOffset(room.id);
   const luxDisplay = room.currentLux !== null ? `${room.currentLux} lux` : 'N/A';
   const motionDisplay = room.motionDetected ? '🟢 Motion detected' : '⚫ No motion';
 
@@ -394,6 +454,20 @@ function createRoomCard(room) {
         <span class="sensor-label">Last motion:</span>
         <span class="sensor-value">${lastMotionDisplay}</span>
       </div>
+      <div class="sensor-item temp-offset-item">
+        <span class="sensor-label">Temp offset:</span>
+        <input
+          type="number"
+          class="temp-offset-input"
+          data-room="${room.id}"
+          min="-20"
+          max="20"
+          step="0.1"
+          value="${offset.toFixed(1)}"
+          aria-label="Temperature offset for ${escapeHtml(room.name)}"
+        >
+        <span class="sensor-value">°F</span>
+      </div>
     </div>
     <div class="room-meta">
       Last update: ${formatTime(room.lastUpdate)}
@@ -418,10 +492,15 @@ function updateRoomCard(card, room) {
   const tempElement = card.querySelector('.room-temp');
   const metaElement = card.querySelector('.room-meta');
   const sensorItems = card.querySelectorAll('.sensor-item .sensor-value');
+  const offsetInput = card.querySelector('.temp-offset-input');
 
   if (tempElement) {
-    const tempF = celsiusToFahrenheit(room.currentTemp);
+    const tempF = getAdjustedTempF(room.id, room.currentTemp);
     tempElement.innerHTML = `${tempF.toFixed(1)}<span class="temp-unit">°F</span>`;
+  }
+
+  if (offsetInput && document.activeElement !== offsetInput) {
+    offsetInput.value = getRoomTempOffset(room.id).toFixed(1);
   }
 
   // Update sensor values
@@ -477,7 +556,8 @@ async function updateRoomChart(roomId) {
     const lastTimestamp = readings[readings.length - 1].timestamp;
 
     const labels = readings.map(r => formatChartTime(r.timestamp, firstTimestamp, lastTimestamp));
-    const temps = readings.map(r => celsiusToFahrenheit(r.temp));
+    const offset = getRoomTempOffset(roomId);
+    const temps = readings.map(r => celsiusToFahrenheit(r.temp) + offset);
 
     // Create point styling based on motion detection
     const dataPointCount = readings.length;

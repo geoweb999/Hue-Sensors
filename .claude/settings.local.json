@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Bash(lsof:*)",
+      "Bash(nc:*)",
+      "Bash(chmod:*)",
+      "Bash(/usr/bin/python3:*)",
+      "Bash(./test-pwa.sh:*)",
+      "Bash(system_profiler:*)",
+      "Bash(diskutil list:*)",
+      "Bash(log show:*)",
+      "Bash(diskutil info:*)",
+      "Bash(ioreg:*)",
+      "Bash(sudo killall:*)",
+      "Bash(kextstat:*)",
+      "Bash(sw_vers:*)"
+    ]
+  }
+}
