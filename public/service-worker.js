@@ -1,5 +1,5 @@
 // Service Worker for Hue Temperature Dashboard PWA
-const CACHE_NAME = 'hue-dashboard-v1.1.0';
+const CACHE_NAME = 'hue-dashboard-v2.1.0';
 const STATIC_CACHE = 'hue-static-v1';
 const DYNAMIC_CACHE = 'hue-dynamic-v1';
 
