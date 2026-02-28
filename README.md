@@ -496,10 +496,31 @@ MIT License - feel free to use this project for personal or commercial purposes.
 
 ---
 
-**Version**: 1.2.0
+**Version**: 2.1.0
 **Last Updated**: February 2026
 
 ## Changelog
+
+### Version 2.1.0 (February 2026)
+- **Circular Color Picker**: Color-capable lights in the control modal now display a circular hue/saturation wheel for intuitive color selection alongside the existing hex input
+- **Per-Room Temperature Offset**: Each room card gains a `±20°F` calibration input — adjusts the displayed temperature and all chart data points in real time; persisted to localStorage
+- **Structured JSON Logging**: Backend now emits structured JSON log lines for all key events (startup, polling, bridge requests, API calls, errors) — configurable via `LOG_LEVEL`, `LOG_PRETTY`, and `SERVICE_NAME` env vars
+- **Hue v2 Event Stream**: Server subscribes to the Hue Bridge v2 SSE event stream (`/eventstream/clip/v2`) with automatic reconnect on disconnect; controlled by `EVENT_STREAM_ENABLED` env var
+- **PWA Housekeeping**: Fixed broken screenshot references in `manifest.json`; updated service worker cache name to match current version; added `.claude/` to `.gitignore`
+
+### Version 2.0.0 (February 2026)
+- **Room Detail Page**: Dedicated page for each room (`/room.html?id=<roomId>`) with full light controls, scene management, and animation effects
+  - Individual light cards with on/off toggle, brightness, and color controls
+  - Scene list showing all saved Hue scenes with one-tap apply
+  - Scenes and Animations sections split into separate panels; locked/default scenes are protected from deletion
+- **Animation Effects via Hue API v2**: Bridge-side animations that run autonomously — no browser timers, persist even when the app is closed
+  - Named effects: Candle, Fire, Sparkle, Colorloop, Cosmos, Enchant, Sunbeam, Underwater
+  - Dynamic Palette Scenes: build custom 2–6 color palettes with per-color brightness and speed control, saved permanently on the bridge
+  - Persistent looping indicator — active scene card shows a pulsing green "● Looping" button so you always know what's playing
+  - Scene IDs persisted to localStorage so the dynamic scenes list survives hard refreshes
+- **All Off Button**: One-tap button on both the Lights Dashboard and Room Detail page to turn off every light in a room
+- **Room Brightness Slider**: Whole-room brightness control on the Lights Dashboard (adjusts all lights in a group simultaneously)
+- **Persist Per-Room Time Ranges**: Selected time range (Auto/30d/7d/1d/1h) for each room card now survives page refreshes via localStorage
 
 ### Version 1.2.0 (February 2026)
 - **Lights Dashboard**: New page to view and control all Hue lights organized by room
@@ -517,7 +538,7 @@ MIT License - feel free to use this project for personal or commercial purposes.
   - Header layout wraps properly on narrow screens — title + buttons on row 1, nav on row 2
   - Compact header padding, smaller buttons, touch-friendly time range controls
   - Single-column card layout on screens ≤768px
-- **Version Display**: Footer shows v2.1 on both pages
+- **Version Display**: Footer shows current version on both pages
 
 ### Version 1.1.0 (February 2026)
 - Added smart data sampling for optimal performance with large datasets
