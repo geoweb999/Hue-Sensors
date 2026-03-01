@@ -64,6 +64,23 @@
         <input type="text" id="save-scene-input" class="save-scene-input" placeholder="New scene name..." maxlength="32">
         <button id="save-scene-btn" class="save-scene-btn">Save Current</button>
       </div>
+      <div class="surprise-scene-form">
+        <div class="surprise-scene-header">
+          <h3>Surprise Scenes</h3>
+          <p>Create a random cohesive color scene using curated swatch styles.</p>
+        </div>
+        <div class="surprise-scene-controls">
+          <select id="surprise-style-select" class="surprise-style-select" aria-label="Choose surprise style"></select>
+          <select id="surprise-speed-select" class="surprise-speed-select" aria-label="Choose surprise animation speed">
+            <option value="0.25">Animate Slow</option>
+            <option value="0.5" selected>Animate Medium</option>
+            <option value="0.75">Animate Fast</option>
+            <option value="1">Animate Max</option>
+          </select>
+          <button id="surprise-scene-btn" class="surprise-scene-btn">Create Surprise</button>
+        </div>
+        <div id="surprise-style-preview" class="surprise-style-preview"></div>
+      </div>
     </div>
 
     <!-- Animation Effects section -->
@@ -115,6 +132,30 @@
       <div class="modal-buttons">
         <button id="anim-save-btn" class="btn-primary">Save &amp; Play</button>
         <button id="anim-cancel-btn" class="btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Surprise editor modal -->
+  <div id="surprise-editor-modal" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-content anim-modal-content">
+      <button class="close-btn" id="surprise-editor-close" aria-label="Close">&times;</button>
+      <h2 id="surprise-editor-title">Edit Surprise</h2>
+
+      <div class="anim-modal-field">
+        <label for="surprise-editor-name">Scene name</label>
+        <input type="text" id="surprise-editor-name" class="anim-scene-name-input" maxlength="32">
+      </div>
+
+      <div class="anim-modal-field">
+        <label>Swatches <span class="anim-palette-hint">(2–8)</span></label>
+        <div id="surprise-swatches-list" class="anim-frames-list"></div>
+        <button id="surprise-add-swatch-btn" class="anim-add-frame-btn">+ Add Swatch</button>
+      </div>
+
+      <div class="modal-buttons">
+        <button id="surprise-save-btn" class="btn-primary">Save Surprise</button>
+        <button id="surprise-cancel-btn" class="btn-ghost">Cancel</button>
       </div>
     </div>
   </div>

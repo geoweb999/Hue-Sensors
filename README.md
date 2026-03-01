@@ -15,6 +15,7 @@ This dashboard continuously polls your Philips Hue Bridge to collect environment
 - **Motion Detection**: Visual indicators showing current motion status and when motion was last detected
 - **Light Level Monitoring**: Displays ambient light levels in lux
 - **Lights Dashboard**: View and control all Hue lights — toggle power, adjust brightness, pick colors, and set color temperature
+- **Surprise Scenes**: One-click random scene generator with 10 curated swatch styles, randomized default brightness (80-100), editable swatches, and per-scene animation presets
 - **Interactive Graphs**: Auto-scaling temperature charts with motion events highlighted as green dots
 - **Smart Data Sampling**: Automatic sampling strategies (hourly/15-min/all) optimize performance for large datasets
 - **Time Range Controls**: Quick-select buttons for viewing 1-hour, 1-day, 7-day, 30-day, or auto-selected ranges
@@ -224,6 +225,10 @@ The dashboard automatically optimizes graph performance when you have accumulate
 |----------|--------|-------------|
 | `/api/rooms` | GET | List all rooms with current readings |
 | `/api/rooms/:roomId` | GET | Detailed room data with full history |
+| `/api/surprises` | GET | List curated surprise swatch styles |
+| `/api/rooms/:groupId/surprise` | POST | Create a randomized cohesive scene for a room |
+| `/api/rooms/:groupId/surprise/remix` | POST | Modify an existing surprise style and save as a new scene |
+| `/api/rooms/:groupId/surprise/custom` | POST | Edit a surprise with custom swatches and save the updated scene |
 | `/api/lights` | GET | All lights grouped by room with state/color info |
 | `/api/lights/:id/state` | PUT | Control a light (on, bri, hue, sat, xy, ct, effect, alert, transitiontime) |
 | `/api/health` | GET | Health check and last poll timestamp |
@@ -497,7 +502,7 @@ MIT License - feel free to use this project for personal or commercial purposes.
 ---
 
 **Version**: 2.1.0
-**Last Updated**: February 2026
+**Last Updated**: March 2026
 
 ## Changelog
 
@@ -506,6 +511,11 @@ MIT License - feel free to use this project for personal or commercial purposes.
 - **Per-Room Temperature Offset**: Each room card gains a `±20°F` calibration input — adjusts the displayed temperature and all chart data points in real time; persisted to localStorage
 - **Structured JSON Logging**: Backend now emits structured JSON log lines for all key events (startup, polling, bridge requests, API calls, errors) — configurable via `LOG_LEVEL`, `LOG_PRETTY`, and `SERVICE_NAME` env vars
 - **Hue v2 Event Stream**: Server subscribes to the Hue Bridge v2 SSE event stream (`/eventstream/clip/v2`) with automatic reconnect on disconnect; controlled by `EVENT_STREAM_ENABLED` env var
+- **Surprise Scene Builder**: Added curated surprise style generation, remixing, and custom swatch editing for room scenes
+  - New Surprise endpoints: style discovery, create, remix, and custom edit flows
+  - Default generated surprise brightness now randomizes between `80–100`
+  - Surprise scene cards now include `Edit`, `Animate`, and dedicated `Stop` actions
+  - Animation speed presets (`Slow`, `Medium`, `Fast`, `Max`) with persistent `Looping` state until stopped
 - **PWA Housekeeping**: Fixed broken screenshot references in `manifest.json`; updated service worker cache name to match current version; added `.claude/` to `.gitignore`
 
 ### Version 2.0.0 (February 2026)

@@ -8,10 +8,17 @@ let roomData = null;
 const lightInputActive = {};   // true while user is dragging/editing a light control
 const lightSendTimeouts = {};  // debounce timers per light
 let roomColorWheel = null;
+let surpriseStyles = [];
+let editingSurpriseScene = null;
+const SURPRISE_DEFAULT_ANIMATION_SPEED = 0.5;
 
 // Room brightness slider state
 let roomBriSliderActive = false;
 let roomBriSendTimeout = null;
+
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 
 // ── Color Conversion ──────────────────────────────────────────────
 
@@ -253,13 +260,22 @@ function renderLightCard(light) {
   `;
 }
 
-function renderSceneCard(scene) {
+function renderSceneCard(scene, surpriseMeta = null) {
   const isAnimated = scene.name.endsWith('-Animation');
   const displayName = isAnimated ? scene.name.slice(0, -'-Animation'.length) : scene.name;
+  const isSurpriseByName = /^surprise\b/i.test(displayName.trim());
+  const isSurpriseByMeta = !!(surpriseMeta && surpriseMeta[scene.id]);
+  const isSurprise = isSurpriseByName || isSurpriseByMeta;
+  const isSurpriseAnimating = !!(surpriseMeta && surpriseMeta[scene.id]?.isAnimating);
+  const animateLabel = isSurpriseAnimating ? 'Looping' : 'Animate';
   return `
     <div class="scene-card${isAnimated ? ' scene-animated' : ''}" data-scene-id="${scene.id}">
       <div class="scene-card-name" title="${escapeHtml(scene.name)}">${escapeHtml(displayName)}</div>
       <div class="scene-card-actions">
+        ${isSurprise ? `<button class="scene-edit-btn" data-scene-id="${scene.id}" title="Edit surprise swatches">Edit</button>` : ''}
+        ${isSurprise ? `<button class="scene-animate-btn" data-scene-id="${scene.id}" title="Animate surprise palette">${animateLabel}</button>` : ''}
+        ${isSurprise ? `<button class="scene-stop-btn" data-scene-id="${scene.id}" title="Stop surprise animation">Stop</button>` : ''}
+        ${isSurprise ? `<button class="scene-remix-btn" data-scene-id="${scene.id}" title="Create a modified surprise">Remix</button>` : ''}
         <button class="scene-activate-btn" data-scene-id="${scene.id}">Activate</button>
         ${!scene.locked ? `<button class="scene-delete-btn" data-scene-id="${scene.id}" title="Delete scene">&times;</button>` : ''}
       </div>
@@ -273,6 +289,7 @@ function renderScenes(scenes) {
     grid.innerHTML = '<p class="no-items-msg">No scenes saved for this room.</p>';
     return;
   }
+  const surpriseMeta = loadSurpriseSceneMeta(roomId);
 
   const animated = scenes.filter(s => s.name.endsWith('-Animation'));
   const staticScenes = scenes.filter(s => !s.name.endsWith('-Animation'));
@@ -283,12 +300,12 @@ function renderScenes(scenes) {
     if (animated.length > 0) {
       html += '<div class="scenes-subsection-title">Scenes</div>';
     }
-    html += '<div class="scenes-subgrid">' + staticScenes.map(renderSceneCard).join('') + '</div>';
+    html += '<div class="scenes-subgrid">' + staticScenes.map((scene) => renderSceneCard(scene, surpriseMeta)).join('') + '</div>';
   }
 
   if (animated.length > 0) {
     html += '<div class="scenes-subsection-title">Animations</div>';
-    html += '<div class="scenes-subgrid">' + animated.map(renderSceneCard).join('') + '</div>';
+    html += '<div class="scenes-subgrid">' + animated.map((scene) => renderSceneCard(scene, surpriseMeta)).join('') + '</div>';
   }
 
   grid.innerHTML = html;
@@ -422,6 +439,7 @@ function renderRoom(data) {
   const scenesSection = document.getElementById('scenes-section');
   scenesSection.classList.remove('hidden');
   renderScenes(data.scenes);
+  pruneSurpriseSceneMeta(data.scenes);
 
   // Automations
   const autoSection = document.getElementById('automations-section');
@@ -694,8 +712,349 @@ async function sendRoomBrightness(bri) {
 
 // ── Scenes ────────────────────────────────────────────────────────
 
+function renderSurpriseStylePreview(style) {
+  const preview = document.getElementById('surprise-style-preview');
+  if (!preview) return;
+  if (!style) {
+    preview.innerHTML = '';
+    return;
+  }
+
+  const dots = (style.samplePalette || [])
+    .map((hex) => `<span class="surprise-style-dot" style="background:${escapeHtml(hex)}"></span>`)
+    .join('');
+  const description = style.description ? escapeHtml(style.description) : 'Randomized cohesive swatches.';
+
+  preview.innerHTML = `
+    <div class="surprise-style-dots">${dots}</div>
+    <div class="surprise-style-desc">${description}</div>
+  `;
+}
+
+async function loadSurpriseStyles() {
+  const select = document.getElementById('surprise-style-select');
+  const button = document.getElementById('surprise-scene-btn');
+  if (!select || !button) return;
+
+  try {
+    const res = await fetch('/api/surprises');
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to load surprise styles');
+    surpriseStyles = Array.isArray(data.styles) ? data.styles : [];
+  } catch (error) {
+    console.error('loadSurpriseStyles error:', error.message);
+    surpriseStyles = [];
+  }
+
+  if (surpriseStyles.length === 0) {
+    select.innerHTML = '<option value="">No surprise styles available</option>';
+    select.disabled = true;
+    button.disabled = true;
+    renderSurpriseStylePreview(null);
+    return;
+  }
+
+  select.innerHTML = surpriseStyles.map((style) =>
+    `<option value="${escapeHtml(style.id)}">${escapeHtml(style.name)}</option>`
+  ).join('');
+
+  select.disabled = false;
+  button.disabled = false;
+  renderSurpriseStylePreview(surpriseStyles[0]);
+}
+
+function loadSurpriseSceneMeta(rid) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(`hueSurpriseScenes_${rid}`) || '{}');
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSurpriseSceneMeta(rid, meta) {
+  localStorage.setItem(`hueSurpriseScenes_${rid}`, JSON.stringify(meta));
+}
+
+function upsertSurpriseSceneMeta(sceneId, sceneName, styleId, palette) {
+  if (!roomId || !sceneId || !Array.isArray(palette) || palette.length === 0) return;
+  const meta = loadSurpriseSceneMeta(roomId);
+  const previous = meta[sceneId] || {};
+  meta[sceneId] = {
+    sceneName,
+    styleId: styleId || null,
+    palette,
+    animationSceneId: previous.animationSceneId || null,
+    isAnimating: previous.isAnimating || false,
+    updatedAt: Date.now()
+  };
+  saveSurpriseSceneMeta(roomId, meta);
+}
+
+function setSurpriseAnimatingByAnimationScene(animationSceneId, isAnimating) {
+  if (!roomId || !animationSceneId) return;
+  const meta = loadSurpriseSceneMeta(roomId);
+  let changed = false;
+  for (const sceneMeta of Object.values(meta)) {
+    if (sceneMeta && sceneMeta.animationSceneId === animationSceneId) {
+      sceneMeta.isAnimating = !!isAnimating;
+      sceneMeta.updatedAt = Date.now();
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveSurpriseSceneMeta(roomId, meta);
+  }
+}
+
+function pruneSurpriseSceneMeta(scenes = []) {
+  if (!roomId) return;
+  const meta = loadSurpriseSceneMeta(roomId);
+  const sceneIds = new Set((scenes || []).map((scene) => scene.id));
+  let changed = false;
+  for (const sceneId of Object.keys(meta)) {
+    if (!sceneIds.has(sceneId)) {
+      delete meta[sceneId];
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveSurpriseSceneMeta(roomId, meta);
+  }
+}
+
+function inferSurpriseStyleFromName(sceneName) {
+  const normalized = String(sceneName || '').toLowerCase();
+  return surpriseStyles.find((style) => normalized.includes(String(style.name || '').toLowerCase())) || null;
+}
+
+function getDefaultSurprisePalette(scene) {
+  const meta = loadSurpriseSceneMeta(roomId);
+  const stored = scene ? meta[scene.id] : null;
+  if (stored && Array.isArray(stored.palette) && stored.palette.length >= 2) {
+    return stored.palette.map((swatch) => ({
+      hex: swatch.hex,
+      brightness: clampNumber(parseInt(swatch.brightness, 10) || 75, 1, 100)
+    }));
+  }
+
+  let style = null;
+  if (stored?.styleId) {
+    style = surpriseStyles.find((entry) => entry.id === stored.styleId) || null;
+  }
+  if (!style && scene) {
+    style = inferSurpriseStyleFromName(scene.name);
+  }
+  if (!style && surpriseStyles.length > 0) {
+    style = surpriseStyles[0];
+  }
+
+  const samplePalette = (style?.samplePalette || ['#c8d8ff', '#f6b8d0', '#c4f0dd']);
+  return samplePalette.slice(0, 6).map((hex) => ({ hex, brightness: 75 }));
+}
+
+function getSelectedSurpriseAnimationSpeed() {
+  const speedSelect = document.getElementById('surprise-speed-select');
+  const speed = parseFloat(speedSelect?.value || String(SURPRISE_DEFAULT_ANIMATION_SPEED));
+  return clampNumber(Number.isFinite(speed) ? speed : SURPRISE_DEFAULT_ANIMATION_SPEED, 0.1, 1);
+}
+
+function rotatePalette(palette, offset = 0) {
+  if (!Array.isArray(palette) || palette.length === 0) return [];
+  const normalized = ((offset % palette.length) + palette.length) % palette.length;
+  if (normalized === 0) return palette.slice();
+  return palette.slice(normalized).concat(palette.slice(0, normalized));
+}
+
+function upsertDynamicSceneStorage(sceneId, name, palette, speed) {
+  if (!roomId || !sceneId) return;
+  const scenes = loadAnimScenes(roomId);
+  const entry = {
+    sceneId,
+    name,
+    palette: Array.isArray(palette) ? palette : [],
+    speed: clampNumber(parseFloat(speed) || SURPRISE_DEFAULT_ANIMATION_SPEED, 0.1, 1)
+  };
+  const existingIndex = scenes.findIndex((scene) => scene.sceneId === sceneId);
+  if (existingIndex >= 0) {
+    scenes[existingIndex] = { ...scenes[existingIndex], ...entry };
+  } else {
+    scenes.push(entry);
+  }
+  saveAnimScenes(roomId, scenes);
+}
+
+function makeSurpriseSwatchRow(hex = '#ffffff', brightness = 75) {
+  const row = document.createElement('div');
+  row.className = 'anim-frame-row';
+  row.innerHTML = `
+    <span class="anim-frame-swatch" style="background:${escapeHtml(hex)}"></span>
+    <input type="color" class="anim-frame-color" value="${escapeHtml(hex)}">
+    <label class="anim-frame-bri-label">
+      <span>Brightness</span>
+      <input type="range" class="anim-frame-bri" min="1" max="100" value="${clampNumber(parseInt(brightness, 10) || 75, 1, 100)}">
+      <span class="anim-frame-bri-val">${clampNumber(parseInt(brightness, 10) || 75, 1, 100)}%</span>
+    </label>
+    <button class="anim-frame-remove" title="Remove swatch">×</button>
+  `;
+
+  const colorInput = row.querySelector('.anim-frame-color');
+  const swatch = row.querySelector('.anim-frame-swatch');
+  const briSlider = row.querySelector('.anim-frame-bri');
+  const briVal = row.querySelector('.anim-frame-bri-val');
+  const removeBtn = row.querySelector('.anim-frame-remove');
+
+  colorInput.addEventListener('input', () => {
+    swatch.style.background = colorInput.value;
+  });
+  briSlider.addEventListener('input', () => {
+    briVal.textContent = `${briSlider.value}%`;
+  });
+  removeBtn.addEventListener('click', () => {
+    const list = document.getElementById('surprise-swatches-list');
+    if (list.querySelectorAll('.anim-frame-row').length > 2) {
+      row.remove();
+      updateSurpriseSwatchRemovability();
+    }
+  });
+
+  return row;
+}
+
+function updateSurpriseSwatchRemovability() {
+  const list = document.getElementById('surprise-swatches-list');
+  if (!list) return;
+  const rows = list.querySelectorAll('.anim-frame-row');
+  rows.forEach((row) => {
+    const removeBtn = row.querySelector('.anim-frame-remove');
+    if (removeBtn) removeBtn.disabled = rows.length <= 2;
+  });
+}
+
+function openSurpriseEditor(sceneId) {
+  const scene = (roomData?.scenes || []).find((entry) => entry.id === sceneId);
+  if (!scene) return;
+
+  editingSurpriseScene = scene;
+
+  const modal = document.getElementById('surprise-editor-modal');
+  const title = document.getElementById('surprise-editor-title');
+  const nameInput = document.getElementById('surprise-editor-name');
+  const list = document.getElementById('surprise-swatches-list');
+
+  title.textContent = 'Edit Surprise';
+  nameInput.value = scene.name || '';
+  list.innerHTML = '';
+
+  const palette = getDefaultSurprisePalette(scene);
+  palette.forEach((swatch) => list.appendChild(makeSurpriseSwatchRow(swatch.hex, swatch.brightness)));
+  updateSurpriseSwatchRemovability();
+
+  modal.classList.add('active');
+  nameInput.focus();
+}
+
+function closeSurpriseEditor() {
+  const modal = document.getElementById('surprise-editor-modal');
+  modal.classList.remove('active');
+  editingSurpriseScene = null;
+}
+
+function initSurpriseEditorModal() {
+  const modal = document.getElementById('surprise-editor-modal');
+  const closeBtn = document.getElementById('surprise-editor-close');
+  const cancelBtn = document.getElementById('surprise-cancel-btn');
+  const addBtn = document.getElementById('surprise-add-swatch-btn');
+  const saveBtn = document.getElementById('surprise-save-btn');
+  const styleSelect = document.getElementById('surprise-style-select');
+
+  closeBtn.addEventListener('click', closeSurpriseEditor);
+  cancelBtn.addEventListener('click', closeSurpriseEditor);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeSurpriseEditor(); });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) {
+      closeSurpriseEditor();
+    }
+  });
+
+  addBtn.addEventListener('click', () => {
+    const list = document.getElementById('surprise-swatches-list');
+    if (list.querySelectorAll('.anim-frame-row').length >= 8) return;
+    list.appendChild(makeSurpriseSwatchRow('#ffffff', 75));
+    updateSurpriseSwatchRemovability();
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    if (!editingSurpriseScene) return;
+
+    const name = document.getElementById('surprise-editor-name').value.trim() || editingSurpriseScene.name;
+    const rows = document.querySelectorAll('#surprise-swatches-list .anim-frame-row');
+    const palette = Array.from(rows).map((row) => ({
+      hex: row.querySelector('.anim-frame-color').value,
+      brightness: clampNumber(parseInt(row.querySelector('.anim-frame-bri').value, 10) || 75, 1, 100)
+    }));
+
+    if (palette.length < 2) {
+      alert('Please choose at least 2 swatches.');
+      return;
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+      const styleId = styleSelect?.value || null;
+      const res = await fetch(`/api/rooms/${roomId}/surprise/custom`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseSceneId: editingSurpriseScene.id,
+          styleId,
+          name,
+          palette,
+          replaceExisting: true
+        })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to edit surprise scene');
+
+      const meta = loadSurpriseSceneMeta(roomId);
+      let preservedAnimationSceneId = null;
+      let preservedIsAnimating = false;
+      if (data.replacedSceneId && meta[data.replacedSceneId]) {
+        preservedAnimationSceneId = meta[data.replacedSceneId].animationSceneId || null;
+        preservedIsAnimating = !!meta[data.replacedSceneId].isAnimating;
+        delete meta[data.replacedSceneId];
+      }
+      meta[data.sceneId] = {
+        sceneName: data.sceneName,
+        styleId: data.style?.id || styleId || null,
+        palette: data.palette,
+        animationSceneId: preservedAnimationSceneId,
+        isAnimating: preservedIsAnimating,
+        updatedAt: Date.now()
+      };
+      saveSurpriseSceneMeta(roomId, meta);
+
+      closeSurpriseEditor();
+      setTimeout(fetchAndRenderRoom, 500);
+    } catch (error) {
+      alert(`Could not edit surprise scene: ${error.message}`);
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Surprise';
+    }
+  });
+}
+
 function initSceneControls() {
   const grid = document.getElementById('scenes-grid');
+  const saveBtn = document.getElementById('save-scene-btn');
+  const saveInput = document.getElementById('save-scene-input');
+  const surpriseSelect = document.getElementById('surprise-style-select');
+  const surpriseSpeedSelect = document.getElementById('surprise-speed-select');
+  const surpriseBtn = document.getElementById('surprise-scene-btn');
 
   // Activate scene
   grid.addEventListener('click', async (e) => {
@@ -719,6 +1078,191 @@ function initSceneControls() {
     } catch (err) {
       btn.textContent = 'Error';
       setTimeout(() => { btn.textContent = 'Activate'; btn.disabled = false; }, 2000);
+    }
+  });
+
+  // Edit surprise with custom swatches
+  grid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.scene-edit-btn');
+    if (!btn) return;
+    openSurpriseEditor(btn.dataset.sceneId);
+  });
+
+  // Animate surprise scene using dynamic palette rotation and preset speed
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-animate-btn');
+    if (!btn) return;
+
+    if (!v2RoomInfo) {
+      alert('Surprise animation requires Hue API v2 support for this room.');
+      return;
+    }
+
+    const surpriseScene = (roomData?.scenes || []).find((scene) => scene.id === btn.dataset.sceneId);
+    if (!surpriseScene) return;
+
+    const meta = loadSurpriseSceneMeta(roomId);
+    const storedMeta = meta[surpriseScene.id] || null;
+    const basePalette = getDefaultSurprisePalette(surpriseScene);
+    if (!Array.isArray(basePalette) || basePalette.length < 2) {
+      alert('Could not animate surprise scene: no usable palette found.');
+      return;
+    }
+
+    const rotateBy = basePalette.length > 1
+      ? Math.floor(Math.random() * (basePalette.length - 1)) + 1
+      : 0;
+    const rotatedPalette = rotatePalette(basePalette, rotateBy);
+    const speed = getSelectedSurpriseAnimationSpeed();
+    const animationName = `${surpriseScene.name} Animation`.slice(0, 32);
+
+    btn.disabled = true;
+    btn.textContent = 'Animating...';
+    try {
+      let animationSceneId = storedMeta?.animationSceneId || null;
+      let reusedExistingAnimation = false;
+
+      if (animationSceneId) {
+        const recallRes = await fetch(`/api/v2/scenes/${animationSceneId}/recall`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'dynamic_palette', speed })
+        });
+        const recallData = await recallRes.json();
+        if (recallData.success) {
+          reusedExistingAnimation = true;
+        } else {
+          animationSceneId = null;
+        }
+      }
+
+      if (!reusedExistingAnimation) {
+        const createRes = await fetch(`/api/v2/rooms/${roomId}/dynamic-scene`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: animationName,
+            palette: rotatedPalette,
+            speed
+          })
+        });
+        const createData = await createRes.json();
+        if (!createData.success) {
+          throw new Error(createData.error || createData.errors?.[0]?.description || 'Failed to animate surprise');
+        }
+        animationSceneId = createData.sceneId;
+      }
+
+      const nextMeta = {
+        sceneName: storedMeta?.sceneName || surpriseScene.name,
+        styleId: storedMeta?.styleId || null,
+        palette: storedMeta?.palette || basePalette,
+        animationSceneId,
+        isAnimating: true,
+        updatedAt: Date.now()
+      };
+      meta[surpriseScene.id] = nextMeta;
+      saveSurpriseSceneMeta(roomId, meta);
+
+      upsertDynamicSceneStorage(animationSceneId, animationName, rotatedPalette, speed);
+      activeDynamicSceneId = animationSceneId;
+      setSurpriseAnimatingByAnimationScene(animationSceneId, true);
+      renderDynamicScenesList();
+      renderScenes(roomData?.scenes || []);
+
+      btn.textContent = 'Looping';
+      btn.disabled = false;
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => {
+        btn.textContent = 'Animate';
+        btn.disabled = false;
+      }, 2000);
+      alert(`Could not animate surprise scene: ${err.message}`);
+    }
+  });
+
+  // Stop surprise animation for this scene's dedicated dynamic scene
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-stop-btn');
+    if (!btn) return;
+
+    const surpriseScene = (roomData?.scenes || []).find((scene) => scene.id === btn.dataset.sceneId);
+    if (!surpriseScene) return;
+
+    const meta = loadSurpriseSceneMeta(roomId);
+    const animationSceneId = meta[surpriseScene.id]?.animationSceneId || null;
+    if (!animationSceneId) {
+      alert('No running surprise animation is linked to this scene yet.');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Stopping...';
+    try {
+      const stopRes = await fetch(`/api/v2/scenes/${animationSceneId}/recall`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'active' })
+      });
+      const stopData = await stopRes.json();
+      if (!stopData.success) {
+        throw new Error(stopData.error || stopData.errors?.[0]?.description || 'Failed to stop surprise animation');
+      }
+
+      if (activeDynamicSceneId === animationSceneId) {
+        activeDynamicSceneId = null;
+      }
+      setSurpriseAnimatingByAnimationScene(animationSceneId, false);
+      renderDynamicScenesList();
+      renderScenes(roomData?.scenes || []);
+
+      btn.textContent = 'Stopped';
+      setTimeout(() => {
+        btn.textContent = 'Stop';
+        btn.disabled = false;
+      }, 1300);
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => {
+        btn.textContent = 'Stop';
+        btn.disabled = false;
+      }, 2000);
+      alert(`Could not stop surprise animation: ${err.message}`);
+    }
+  });
+
+  // Remix existing surprise scene into a new one
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-remix-btn');
+    if (!btn) return;
+
+    const baseSceneId = btn.dataset.sceneId;
+    const styleId = surpriseSelect?.value || null;
+    btn.disabled = true;
+    btn.textContent = 'Remixing...';
+
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/surprise/remix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseSceneId, styleId })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to remix surprise');
+
+      upsertSurpriseSceneMeta(data.sceneId, data.sceneName, data.style?.id || styleId, data.palette || []);
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        console.warn('Surprise remix created with warnings:', data.warnings);
+      }
+
+      btn.textContent = 'Remixed!';
+      setTimeout(() => { btn.textContent = 'Remix'; btn.disabled = false; }, 1500);
+      setTimeout(fetchAndRenderRoom, 500);
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => { btn.textContent = 'Remix'; btn.disabled = false; }, 2000);
+      alert(`Could not remix surprise scene: ${err.message}`);
     }
   });
 
@@ -747,9 +1291,6 @@ function initSceneControls() {
   });
 
   // Save current as new scene
-  const saveBtn = document.getElementById('save-scene-btn');
-  const saveInput = document.getElementById('save-scene-input');
-
   saveInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') saveBtn.click();
   });
@@ -779,6 +1320,58 @@ function initSceneControls() {
       alert(`Could not save scene: ${err.message}`);
     }
   });
+
+  if (surpriseSelect) {
+    surpriseSelect.addEventListener('change', () => {
+      const selected = surpriseStyles.find((style) => style.id === surpriseSelect.value);
+      renderSurpriseStylePreview(selected || null);
+    });
+  }
+
+  if (surpriseSpeedSelect && !surpriseSpeedSelect.value) {
+    surpriseSpeedSelect.value = String(SURPRISE_DEFAULT_ANIMATION_SPEED);
+  }
+
+  if (surpriseBtn) {
+    surpriseBtn.addEventListener('click', async () => {
+      const styleId = surpriseSelect?.value;
+      if (!styleId) return;
+
+      surpriseBtn.disabled = true;
+      surpriseBtn.textContent = 'Creating...';
+
+      try {
+        const res = await fetch(`/api/rooms/${roomId}/surprise`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ styleId })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to create surprise scene');
+
+        upsertSurpriseSceneMeta(data.sceneId, data.sceneName, data.style?.id || styleId, data.palette || []);
+        if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+          console.warn('Surprise scene created with warnings:', data.warnings);
+        }
+
+        surpriseBtn.textContent = 'Created!';
+        setTimeout(() => {
+          surpriseBtn.textContent = 'Create Surprise';
+          surpriseBtn.disabled = false;
+        }, 1500);
+        setTimeout(fetchAndRenderRoom, 500);
+      } catch (err) {
+        surpriseBtn.textContent = 'Error';
+        setTimeout(() => {
+          surpriseBtn.textContent = 'Create Surprise';
+          surpriseBtn.disabled = false;
+        }, 2000);
+        alert(`Could not create surprise scene: ${err.message}`);
+      }
+    });
+  }
+
+  loadSurpriseStyles();
 }
 
 // ── Animation Effects (Hue API v2) ────────────────────────────────
@@ -927,7 +1520,9 @@ async function initAnimationSection() {
         const data = await res.json();
         if (!data.success) throw new Error(data.error || (data.errors?.[0]?.description) || 'Failed');
         activeDynamicSceneId = sceneId;
+        setSurpriseAnimatingByAnimationScene(sceneId, true);
         renderDynamicScenesList(); // re-render all cards to show looping state
+        renderScenes(roomData?.scenes || []);
       } catch (err) {
         console.error('Play error:', err.message);
         playBtn.textContent = '▶ Play';
@@ -951,6 +1546,8 @@ async function initAnimationSection() {
           activeDynamicSceneId = null;
           renderDynamicScenesList();
         }
+        setSurpriseAnimatingByAnimationScene(sceneId, false);
+        renderScenes(roomData?.scenes || []);
       } catch (err) {
         console.error('Stop error:', err.message);
       } finally {
@@ -1170,6 +1767,7 @@ async function init() {
   initLightControls();
   initRoomBrightness();
   initSceneControls();
+  initSurpriseEditorModal();
   initAnimBuilderModal();
 
   await fetchAndRenderRoom();
