@@ -205,19 +205,47 @@ class HueClient {
   }
 
   async createScene(name, groupId, lightIds) {
+    const getHueErrors = (payload) => {
+      if (Array.isArray(payload)) {
+        return payload
+          .filter((entry) => entry?.error)
+          .map((entry) => entry.error?.description || JSON.stringify(entry.error))
+          .filter(Boolean);
+      }
+      return [];
+    };
+
+    const sceneBody = groupId
+      // For GroupScene, sending "lights" can conflict on newer bridges.
+      ? { name, type: 'GroupScene', group: groupId, recycle: false }
+      : { name, type: 'LightScene', lights: lightIds, recycle: false };
+
     const result = await this._request(
       `/api/${this.apiToken}/scenes`,
       'POST',
-      { name, lights: lightIds, type: 'GroupScene', group: groupId, recycle: false }
+      sceneBody
     );
+    const createErrors = getHueErrors(result);
+    if (createErrors.length > 0) {
+      throw new Error(`Bridge rejected scene creation: ${createErrors.join('; ')}`);
+    }
+
     const idEntry = (Array.isArray(result) ? result : []).find(r => r.success?.id);
-    if (!idEntry) throw new Error('Failed to create scene');
+    if (!idEntry) {
+      throw new Error('Bridge did not return a scene id after creation');
+    }
+
     const sceneId = idEntry.success.id;
-    await this._request(
+    const storeResult = await this._request(
       `/api/${this.apiToken}/scenes/${sceneId}`,
       'PUT',
       { storelightstate: true }
     );
+    const storeErrors = getHueErrors(storeResult);
+    if (storeErrors.length > 0) {
+      throw new Error(`Scene created but failed to store light state: ${storeErrors.join('; ')}`);
+    }
+
     return sceneId;
   }
 
