@@ -145,7 +145,7 @@ public/
 
 ### Logging
 
-The backend emits structured JSON logs for startup, polling, Hue bridge requests, API lifecycle events, and mutation actions.
+The backend emits structured JSON logs for startup, polling, Hue bridge requests, mutation actions, and bridge event stream updates.
 It also listens to the Hue Bridge v2 event stream (`/eventstream/clip/v2`) and logs real-time bridge events.
 
 Example `.env` logging configuration:
@@ -161,7 +161,7 @@ Example log lines:
 
 ```json
 {"ts":"2026-02-27T21:15:29.785Z","level":"info","event":"APP_START","msg":"Application startup initiated","service":"hue-temperature-tracker","env":"development","port":3000}
-{"ts":"2026-02-27T21:16:08.122Z","level":"info","event":"API_REQUEST_END","msg":"API request completed","service":"hue-temperature-tracker","env":"development","requestId":"f064cf2f-a9e0-4ca6-83f6-7a4283a3f116","method":"PUT","route":"/api/lights/3/state","status":200,"durationMs":98.71}
+{"ts":"2026-02-27T21:16:08.122Z","level":"info","event":"LIGHT_STATE_SET","msg":"Light state updated","service":"hue-temperature-tracker","env":"development","requestId":"f064cf2f-a9e0-4ca6-83f6-7a4283a3f116","method":"PUT","route":"/api/lights/3/state","lightId":"3","stateKeys":["on","bri"]}
 {"ts":"2026-02-27T21:16:20.433Z","level":"error","event":"HUE_ERROR","msg":"Failed to connect to Hue bridge (v1)","service":"hue-temperature-tracker","env":"development","apiVersion":"v1","method":"GET","path":"/api/[REDACTED]/lights","durationMs":1002,"error":{"name":"Error","message":"connect ETIMEDOUT 10.0.18.144:443"}}
 ```
 

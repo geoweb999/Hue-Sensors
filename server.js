@@ -22,40 +22,13 @@ let database = null;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-function apiRequestLogger(req, res, next) {
-  const requestId = randomUUID();
-  req.requestId = requestId;
-
-  const start = process.hrtime.bigint();
-  logger.info('API_REQUEST_START', 'API request started', {
-    requestId,
-    method: req.method,
-    route: req.originalUrl
-  });
-
-  res.on('finish', () => {
-    const durationMs = Number(process.hrtime.bigint() - start) / 1000000;
-    const fields = {
-      requestId,
-      method: req.method,
-      route: req.originalUrl,
-      status: res.statusCode,
-      durationMs: Number(durationMs.toFixed(2))
-    };
-
-    if (res.statusCode >= 500) {
-      logger.error('API_REQUEST_ERROR', 'API request failed', fields);
-      return;
-    }
-
-    logger.info('API_REQUEST_END', 'API request completed', fields);
-  });
-
+function attachRequestId(req, res, next) {
+  req.requestId = randomUUID();
   next();
 }
 
 // API Routes
-app.use('/api', apiRequestLogger, apiRoutes);
+app.use('/api', attachRequestId, apiRoutes);
 
 // Polling interval reference
 let pollingInterval;
