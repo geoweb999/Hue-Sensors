@@ -15,7 +15,7 @@ This dashboard continuously polls your Philips Hue Bridge to collect environment
 - **Motion Detection**: Visual indicators showing current motion status and when motion was last detected
 - **Light Level Monitoring**: Displays ambient light levels in lux
 - **Lights Dashboard**: View and control all Hue lights — toggle power, adjust brightness, pick colors, and set color temperature
-- **Surprise Scenes**: One-click random scene generator with 10 curated swatch styles, randomized default brightness (80-100), editable swatches, and per-scene animation presets
+- **Surprise Scenes**: One-click random scene generator with 10 curated swatch styles, randomized default brightness (80-100), editable color/brightness swatches, and per-scene animation presets
 - **Interactive Graphs**: Auto-scaling temperature charts with motion events highlighted as green dots
 - **Smart Data Sampling**: Automatic sampling strategies (hourly/15-min/all) optimize performance for large datasets
 - **Time Range Controls**: Quick-select buttons for viewing 1-hour, 1-day, 7-day, 30-day, or auto-selected ranges
@@ -228,7 +228,8 @@ The dashboard automatically optimizes graph performance when you have accumulate
 | `/api/surprises` | GET | List curated surprise swatch styles |
 | `/api/rooms/:groupId/surprise` | POST | Create a randomized cohesive scene for a room |
 | `/api/rooms/:groupId/surprise/remix` | POST | Modify an existing surprise style and save as a new scene |
-| `/api/rooms/:groupId/surprise/custom` | POST | Edit a surprise with custom swatches and save the updated scene |
+| `/api/rooms/:groupId/surprise/custom` | POST | Edit scene colors/brightness with custom swatches and save an updated scene |
+| `/api/scenes/:sceneId` | PUT | Edit an existing scene (rename) |
 | `/api/lights` | GET | All lights grouped by room with state/color info |
 | `/api/lights/:id/state` | PUT | Control a light (on, bri, hue, sat, xy, ct, effect, alert, transitiontime) |
 | `/api/health` | GET | Health check and last poll timestamp |
@@ -514,7 +515,7 @@ MIT License - feel free to use this project for personal or commercial purposes.
 - **Surprise Scene Builder**: Added curated surprise style generation, remixing, and custom swatch editing for room scenes
   - New Surprise endpoints: style discovery, create, remix, and custom edit flows
   - Default generated surprise brightness now randomizes between `80–100`
-  - Surprise scene cards now include `Edit`, `Animate`, and dedicated `Stop` actions
+  - Scene cards now include `Edit` (swatches), `Rename`, `Animate`, and dedicated `Stop` actions
   - Animation speed presets (`Slow`, `Medium`, `Fast`, `Max`) with persistent `Looping` state until stopped
 - **PWA Housekeeping**: Fixed broken screenshot references in `manifest.json`; updated service worker cache name to match current version; added `.claude/` to `.gitignore`
 

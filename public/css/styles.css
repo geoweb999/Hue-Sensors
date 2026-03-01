@@ -1622,6 +1622,23 @@ body[data-theme="dark"] {
   border-color: #a9c1ee;
 }
 
+.scene-rename-btn {
+  background: #eef8ff;
+  color: #2e7097;
+  border: 1px solid #bfdbeb;
+  border-radius: 6px;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scene-rename-btn:hover {
+  background: #ddf1ff;
+  border-color: #95c4df;
+}
+
 .scene-remix-btn {
   background: #f3ecff;
   color: #6b4ca1;
@@ -2219,6 +2236,17 @@ body[data-theme="dark"] {
 [data-theme="dark"] .scene-edit-btn:hover {
   background: rgba(92, 137, 222, 0.34);
   border-color: #6f95dd;
+}
+
+[data-theme="dark"] .scene-rename-btn {
+  background: rgba(74, 144, 184, 0.2);
+  border-color: #3f7ea5;
+  color: #c5e9ff;
+}
+
+[data-theme="dark"] .scene-rename-btn:hover {
+  background: rgba(74, 144, 184, 0.34);
+  border-color: #5ea2cd;
 }
 
 [data-theme="dark"] .scene-remix-btn {
