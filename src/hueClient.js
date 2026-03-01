@@ -264,6 +264,14 @@ class HueClient {
     );
   }
 
+  async updateScene(sceneId, updates = {}) {
+    return this._request(
+      `/api/${this.apiToken}/scenes/${sceneId}`,
+      'PUT',
+      updates
+    );
+  }
+
   // ── Hue CLIP API v2 methods ────────────────────────────────────────────────
 
   // Get all v2 rooms (includes id_v1 and services[] with grouped_light rid)

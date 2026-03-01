@@ -725,10 +725,6 @@ router.post('/rooms/:groupId/surprise/remix', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Base scene does not belong to this room' });
     }
 
-    if (!isSurpriseSceneName(baseScene.name)) {
-      return res.status(400).json({ success: false, error: 'Base scene is not a surprise scene' });
-    }
-
     const style = styleId
       ? SURPRISE_STYLE_MAP.get(styleId)
       : inferStyleFromSceneName(baseScene.name) || randomItem(SURPRISE_STYLES);
@@ -817,9 +813,6 @@ router.post('/rooms/:groupId/surprise/custom', async (req, res) => {
       }
       if (String(baseScene.group) !== String(groupId)) {
         return res.status(400).json({ success: false, error: 'Base scene does not belong to this room' });
-      }
-      if (!isSurpriseSceneName(baseScene.name)) {
-        return res.status(400).json({ success: false, error: 'Base scene is not a surprise scene' });
       }
     }
 
@@ -968,6 +961,48 @@ router.delete('/scenes/:sceneId', async (req, res) => {
     res.json({ success: true, result });
   } catch (error) {
     logger.error('SCENE_DELETE_ERROR', 'Failed to delete scene', {
+      ...requestContext(req),
+      sceneId: req.params.sceneId,
+      error
+    });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// PUT /api/scenes/:sceneId - Update an existing scene
+router.put('/scenes/:sceneId', async (req, res) => {
+  try {
+    const { sceneId } = req.params;
+    const { name } = req.body || {};
+    const nextName = String(name || '').trim();
+    if (!nextName) {
+      logger.warn('SCENE_UPDATE_REJECTED', 'Scene update rejected due to missing name', {
+        ...requestContext(req),
+        sceneId
+      });
+      return res.status(400).json({ success: false, error: 'Scene name is required' });
+    }
+
+    const sanitizedName = sanitizeSceneName(nextName, 'Scene');
+    const result = await hueClient.updateScene(sceneId, { name: sanitizedName });
+    const errors = (Array.isArray(result) ? result : []).filter((entry) => entry.error);
+    if (errors.length > 0) {
+      logger.warn('SCENE_UPDATE_REJECTED', 'Scene update returned bridge errors', {
+        ...requestContext(req),
+        sceneId,
+        errorCount: errors.length
+      });
+      return res.status(400).json({ success: false, errors: errors.map((entry) => entry.error) });
+    }
+
+    logger.info('SCENE_UPDATE', 'Scene updated', {
+      ...requestContext(req),
+      sceneId,
+      name: sanitizedName
+    });
+    res.json({ success: true, result, sceneId, name: sanitizedName });
+  } catch (error) {
+    logger.error('SCENE_UPDATE_ERROR', 'Failed to update scene', {
       ...requestContext(req),
       sceneId: req.params.sceneId,
       error

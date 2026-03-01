@@ -272,7 +272,8 @@ function renderSceneCard(scene, surpriseMeta = null) {
     <div class="scene-card${isAnimated ? ' scene-animated' : ''}" data-scene-id="${scene.id}">
       <div class="scene-card-name" title="${escapeHtml(scene.name)}">${escapeHtml(displayName)}</div>
       <div class="scene-card-actions">
-        ${isSurprise ? `<button class="scene-edit-btn" data-scene-id="${scene.id}" title="Edit surprise swatches">Edit</button>` : ''}
+        <button class="scene-edit-btn" data-scene-id="${scene.id}" title="Edit colors and brightness">Edit</button>
+        <button class="scene-rename-btn" data-scene-id="${scene.id}" title="Rename scene">Rename</button>
         ${isSurprise ? `<button class="scene-animate-btn" data-scene-id="${scene.id}" title="Animate surprise palette">${animateLabel}</button>` : ''}
         ${isSurprise ? `<button class="scene-stop-btn" data-scene-id="${scene.id}" title="Stop surprise animation">Stop</button>` : ''}
         ${isSurprise ? `<button class="scene-remix-btn" data-scene-id="${scene.id}" title="Create a modified surprise">Remix</button>` : ''}
@@ -1081,7 +1082,48 @@ function initSceneControls() {
     }
   });
 
-  // Edit surprise with custom swatches
+  // Rename non-surprise scene
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-rename-btn');
+    if (!btn) return;
+    const sceneId = btn.dataset.sceneId;
+    const scene = (roomData?.scenes || []).find((entry) => entry.id === sceneId);
+    if (!scene) return;
+
+    const currentName = scene.name || '';
+    const nextNameRaw = prompt('Enter a new scene name:', currentName);
+    if (nextNameRaw == null) return;
+    const nextName = nextNameRaw.trim();
+    if (!nextName || nextName === currentName) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    try {
+      const res = await fetch(`/api/scenes/${sceneId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nextName })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to update scene');
+
+      btn.textContent = 'Saved';
+      setTimeout(() => {
+        btn.textContent = 'Rename';
+        btn.disabled = false;
+      }, 1100);
+      setTimeout(fetchAndRenderRoom, 300);
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => {
+        btn.textContent = 'Rename';
+        btn.disabled = false;
+      }, 1800);
+      alert(`Could not edit scene: ${err.message}`);
+    }
+  });
+
+  // Edit surprise with custom swatches (colors + brightness)
   grid.addEventListener('click', (e) => {
     const btn = e.target.closest('.scene-edit-btn');
     if (!btn) return;
