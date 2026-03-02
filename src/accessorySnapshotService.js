@@ -10,6 +10,13 @@ function sortDevices(devices) {
   });
 }
 
+function normalizeName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 function resolveResourceDeviceRid(serviceRidToDeviceRid, resource) {
   const ownerRid = resource?.owner?.rid;
   if (!ownerRid) return null;
@@ -235,6 +242,31 @@ function buildDevicesForGroup(groupId, resources) {
   for (const [sid, sensor] of Object.entries(sensors || {})) {
     const base = String(sensor?.uniqueid || '').split('-')[0];
     if (base && uniqueBaseForGroup.has(base)) expandedRoomSensorIds.add(String(sid));
+  }
+
+  // Motion rescue: some bridges omit presence sensor IDs from group.sensors.
+  // If this room has no presence sensor after normal expansion, infer by room name
+  // and include all sibling sensors sharing the same uniqueid base.
+  const hasPresenceInExpanded = [...expandedRoomSensorIds].some((sid) => String(sensors[sid]?.type || '').toLowerCase().includes('presence'));
+  if (!hasPresenceInExpanded) {
+    const roomNameNorm = normalizeName(group.name);
+    if (roomNameNorm) {
+      for (const [sid, sensor] of Object.entries(sensors || {})) {
+        const type = String(sensor?.type || '').toLowerCase();
+        const sensorNameNorm = normalizeName(sensor?.name);
+        if (!type.includes('presence') || !sensorNameNorm) continue;
+        if (!sensorNameNorm.includes(roomNameNorm) && !roomNameNorm.includes(sensorNameNorm)) continue;
+
+        const base = String(sensor?.uniqueid || '').split('-')[0] || null;
+        expandedRoomSensorIds.add(String(sid));
+        if (base) {
+          for (const [otherSid, otherSensor] of Object.entries(sensors || {})) {
+            const otherBase = String(otherSensor?.uniqueid || '').split('-')[0] || null;
+            if (otherBase && otherBase === base) expandedRoomSensorIds.add(String(otherSid));
+          }
+        }
+      }
+    }
   }
 
   const v1SensorIdToDeviceRid = new Map(sensorServiceIdToDeviceRid);

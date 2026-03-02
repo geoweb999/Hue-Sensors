@@ -15,6 +15,7 @@ This dashboard continuously polls your Philips Hue Bridge to collect environment
 - **Motion Detection**: Visual indicators showing current motion status and when motion was last detected
 - **Light Level Monitoring**: Displays ambient light levels in lux
 - **Lights Dashboard**: View and control all Hue lights — toggle power, adjust brightness, pick colors, and set color temperature
+- **Stable Room Accessories**: Snapshot-backed accessory endpoint for room details (motion sensors, dimmers, battery/connectivity, button events) with stale-state metadata during bridge outages
 - **Surprise Scenes**: One-click random scene generator with 10 curated swatch styles, randomized default brightness (80-100), editable color/brightness swatches, per-light assignment mode, reusable palette library, live preview toggle, and per-scene animation controls
 - **Interactive Graphs**: Auto-scaling temperature charts with motion events highlighted as green dots
 - **Smart Data Sampling**: Automatic sampling strategies (hourly/15-min/all) optimize performance for large datasets
@@ -34,6 +35,7 @@ src/
 ├── config.js          # Environment configuration and validation
 ├── database.js        # SQLite database operations and persistence
 ├── dataStore.js       # In-memory cache + database integration
+├── accessorySnapshotService.js # Background room accessory snapshot refresher
 ├── hueClient.js       # Philips Hue Bridge API integration
 └── api/
     └── routes.js      # REST API endpoints for frontend
@@ -44,6 +46,7 @@ src/
 - **Hue Client**: Connects to Hue Bridge via HTTPS, fetches sensor data, and matches temperature/motion/light sensors from the same physical device
 - **Database Layer**: SQLite database with better-sqlite3 for persistent storage of all readings
 - **Data Store**: Maintains in-memory cache of all readings for fast access, writes to database on each poll
+- **Accessory Snapshot Service**: Builds deterministic per-room accessory snapshots in the background and preserves last-good state when bridge requests fail
 - **API Layer**: Provides REST endpoints for room lists, detailed historical data, and database statistics
 - **Polling Service**: Background service that queries Hue Bridge at configured intervals
 
@@ -225,6 +228,7 @@ The dashboard automatically optimizes graph performance when you have accumulate
 |----------|--------|-------------|
 | `/api/rooms` | GET | List all rooms with current readings |
 | `/api/rooms/:roomId` | GET | Detailed room data with full history |
+| `/api/rooms/:groupId/devices` | GET | Snapshot-backed room accessories with `stale`, `lastUpdated`, and `lastError` metadata |
 | `/api/surprises` | GET | List curated surprise swatch styles |
 | `/api/rooms/:groupId/surprise` | POST | Create a randomized cohesive scene for a room |
 | `/api/rooms/:groupId/surprise/remix` | POST | Modify an existing surprise style and save as a new scene |
