@@ -1,3 +1,4 @@
+import http from 'http';
 import https from 'https';
 import { config } from './config.js';
 import { logger } from './logger.js';
@@ -25,84 +26,101 @@ class HueClient {
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
       const safePath = this._sanitizePath(path);
+      const attemptOrder = [
+        { protocol: 'https', transport: https, port: 443, rejectUnauthorized: false },
+        { protocol: 'http', transport: http, port: 80 }
+      ];
+
       logger.debug('HUE_REQUEST', 'Hue v1 request started', {
         apiVersion: 'v1',
         method,
-        path: safePath
+        path: safePath,
+        protocolFallback: 'https->http'
       });
 
-      const options = {
-        hostname: this.bridgeIp,
-        port: 443,
-        path,
-        method,
-        rejectUnauthorized: false // Hue Bridge uses self-signed cert
+      const attemptRequest = (index, lastError = null) => {
+        if (index >= attemptOrder.length) {
+          reject(lastError || new Error('Failed to connect to Hue Bridge'));
+          return;
+        }
+
+        const cfg = attemptOrder[index];
+        const options = {
+          hostname: this.bridgeIp,
+          port: cfg.port,
+          path,
+          method,
+          ...(cfg.rejectUnauthorized === false ? { rejectUnauthorized: false } : {})
+        };
+        if (body) {
+          options.headers = { 'Content-Type': 'application/json' };
+        }
+
+        const req = cfg.transport.request(options, (res) => {
+          let data = '';
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
+          res.on('end', () => {
+            const durationMs = Date.now() - startedAt;
+            const responseMeta = this._extractResponseMeta(res, data);
+            try {
+              const parsed = JSON.parse(data);
+              const responseFields = {
+                apiVersion: 'v1',
+                method,
+                path: safePath,
+                status: res.statusCode,
+                durationMs,
+                protocol: cfg.protocol
+              };
+              if ((res.statusCode || 0) >= 400) {
+                logger.warn('HUE_RESPONSE', 'Hue v1 response returned error status', responseFields);
+              } else {
+                logger.debug('HUE_RESPONSE', 'Hue v1 response received', responseFields);
+              }
+              resolve(parsed);
+            } catch (error) {
+              const parseError = responseMeta.isHtml
+                ? new Error('Hue bridge returned HTML instead of JSON. Check bridge IP, API token, and bridge availability.')
+                : new Error('Hue bridge returned a non-JSON response.');
+
+              logger.warn('HUE_WARNING', 'Hue v1 response parse failed; trying fallback protocol if available', {
+                apiVersion: 'v1',
+                method,
+                path: safePath,
+                status: res.statusCode,
+                durationMs,
+                protocol: cfg.protocol,
+                contentType: responseMeta.contentType,
+                bodyPreview: responseMeta.preview,
+                error: parseError.message
+              });
+
+              attemptRequest(index + 1, parseError);
+            }
+          });
+        });
+
+        req.on('error', (error) => {
+          logger.warn('HUE_WARNING', 'Hue v1 transport failed; trying fallback protocol if available', {
+            apiVersion: 'v1',
+            method,
+            path: safePath,
+            durationMs: Date.now() - startedAt,
+            protocol: cfg.protocol,
+            error: error.message
+          });
+          attemptRequest(index + 1, new Error(`Failed to connect to Hue Bridge via ${cfg.protocol}: ${error.message}`));
+        });
+
+        if (body) {
+          req.write(JSON.stringify(body));
+        }
+        req.end();
       };
 
-      if (body) {
-        options.headers = { 'Content-Type': 'application/json' };
-      }
-
-      const req = https.request(options, (res) => {
-        let data = '';
-
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-
-        res.on('end', () => {
-          const durationMs = Date.now() - startedAt;
-          const responseMeta = this._extractResponseMeta(res, data);
-          try {
-            const parsed = JSON.parse(data);
-            const responseFields = {
-              apiVersion: 'v1',
-              method,
-              path: safePath,
-              status: res.statusCode,
-              durationMs
-            };
-            if ((res.statusCode || 0) >= 400) {
-              logger.warn('HUE_RESPONSE', 'Hue v1 response returned error status', responseFields);
-            } else {
-              logger.debug('HUE_RESPONSE', 'Hue v1 response received', responseFields);
-            }
-            resolve(parsed);
-          } catch (error) {
-            logger.error('HUE_ERROR', 'Failed to parse Hue v1 response', {
-              apiVersion: 'v1',
-              method,
-              path: safePath,
-              status: res.statusCode,
-              durationMs,
-              contentType: responseMeta.contentType,
-              bodyPreview: responseMeta.preview,
-              error
-            });
-            if (responseMeta.isHtml) {
-              reject(new Error('Hue bridge returned HTML instead of JSON. Check bridge IP, API token, and bridge availability.'));
-              return;
-            }
-            reject(new Error('Hue bridge returned a non-JSON response.'));
-          }
-        });
-      });
-
-      req.on('error', (error) => {
-        logger.error('HUE_ERROR', 'Failed to connect to Hue bridge (v1)', {
-          apiVersion: 'v1',
-          method,
-          path: safePath,
-          durationMs: Date.now() - startedAt,
-          error
-        });
-        reject(new Error(`Failed to connect to Hue Bridge: ${error.message}`));
-      });
-
-      if (body) {
-        req.write(JSON.stringify(body));
-      }
-      req.end();
+      attemptRequest(0);
     });
   }
 

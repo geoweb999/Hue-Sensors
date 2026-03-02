@@ -819,9 +819,9 @@ function renderRoomLayoutShowcase() {
       <div class="room-layout-grid two-col">
         <section class="mock-panel">
           <h3>Scene Launch Deck</h3>
-          <div class="mock-chip-row">
+          <div class="scene-launch-bubbles">
             ${scenes.length > 0
-              ? scenes.map((scene) => `<span class="mock-chip">${escapeHtml(scene.name)}</span>`).join('')
+              ? scenes.map((scene) => `<button type="button" class="scene-launch-bubble" data-scene-id="${escapeHtml(scene.id)}">${escapeHtml(scene.name)}</button>`).join('')
               : '<span class="mock-chip">No scenes available</span>'}
           </div>
           <ul class="mock-list">
@@ -868,6 +868,38 @@ function renderRoomLayoutShowcase() {
   `;
 }
 
+async function activateSceneFromStudioBubble(sceneId, bubble) {
+  if (!sceneId || !bubble) return;
+  const originalLabel = bubble.textContent;
+  bubble.disabled = true;
+  bubble.classList.add('launching');
+  bubble.textContent = 'Activating...';
+  try {
+    const res = await fetch(`/api/rooms/${roomId}/scene`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sceneId })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+    bubble.classList.remove('launching');
+    bubble.classList.add('activated');
+    bubble.textContent = 'Activated';
+    setTimeout(fetchAndRenderRoom, 650);
+  } catch (error) {
+    bubble.classList.remove('launching');
+    bubble.classList.add('launch-error');
+    bubble.textContent = 'Error';
+    console.error('activateSceneFromStudioBubble error', error);
+  } finally {
+    setTimeout(() => {
+      bubble.classList.remove('activated', 'launch-error', 'launching');
+      bubble.textContent = originalLabel;
+      bubble.disabled = false;
+    }, 1200);
+  }
+}
+
 function setRoomOpsMode(mode) {
   if (!ROOM_OPS_MODE_DESCRIPTIONS[mode]) return;
   currentRoomOpsMode = mode;
@@ -899,6 +931,14 @@ function initRoomOpsModePicker() {
     if (!button) return;
     setRoomOpsMode(button.dataset.roomOpsMode);
   });
+
+  const showcase = document.getElementById('room-layout-showcase');
+  showcase?.addEventListener('click', (event) => {
+    const bubble = event.target.closest('.scene-launch-bubble');
+    if (!bubble) return;
+    activateSceneFromStudioBubble(bubble.dataset.sceneId, bubble);
+  });
+
   setRoomOpsMode(currentRoomOpsMode);
 }
 

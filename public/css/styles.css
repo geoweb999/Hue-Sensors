@@ -3021,6 +3021,53 @@ body[data-theme="dark"] {
   margin-bottom: 0.55rem;
 }
 
+.scene-launch-bubbles {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
+.scene-launch-bubble {
+  border: 1px solid #b9d2e3;
+  background: linear-gradient(145deg, #f8fcff, #e9f4fb);
+  color: #1f5573;
+  border-radius: 999px;
+  min-height: 54px;
+  min-width: 170px;
+  padding: 0.65rem 1.1rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+.scene-launch-bubble:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(38, 96, 129, 0.18);
+}
+
+.scene-launch-bubble:active {
+  transform: translateY(0);
+}
+
+.scene-launch-bubble.launching {
+  background: linear-gradient(145deg, #e1f2ff, #cde7fa);
+}
+
+.scene-launch-bubble.activated {
+  background: linear-gradient(145deg, #dff6e9, #c9edd7);
+  border-color: #8ec8a4;
+  color: #20563a;
+}
+
+.scene-launch-bubble.launch-error {
+  background: linear-gradient(145deg, #fdeceb, #f8d9d7);
+  border-color: #e2a3a0;
+  color: #7a2e2b;
+}
+
 .mock-chip {
   background: #edf4fa;
   color: #2b5b79;
@@ -3098,6 +3145,30 @@ body[data-theme="dark"] {
 [data-theme="dark"] .mock-chip {
   background: rgba(71, 116, 145, 0.3);
   color: #c6dff0;
+}
+
+[data-theme="dark"] .scene-launch-bubble {
+  background: linear-gradient(145deg, #2a3945, #22303a);
+  border-color: #4a6273;
+  color: #d6e9f7;
+}
+
+[data-theme="dark"] .scene-launch-bubble:hover {
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="dark"] .scene-launch-bubble.launching {
+  background: linear-gradient(145deg, #294f67, #26455a);
+}
+
+[data-theme="dark"] .scene-launch-bubble.activated {
+  background: linear-gradient(145deg, #2f5f4a, #2a5341);
+  border-color: #5f967a;
+}
+
+[data-theme="dark"] .scene-launch-bubble.launch-error {
+  background: linear-gradient(145deg, #5f3030, #522b2b);
+  border-color: #8d5353;
 }
 
 [data-theme="dark"] .mock-dot {

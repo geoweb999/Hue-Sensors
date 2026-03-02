@@ -33,37 +33,50 @@ function resolveResourceDeviceRid(serviceRidToDeviceRid, resource) {
 }
 
 async function fetchResources() {
-  const [roomsResp, zonesResp, groupsData, lightsResp, tempResp, motionResp, lightLevelResp, deviceResp, powerResp, connectivityResp, buttonResp, sensorsData] = await Promise.all([
-    hueClient.v2GetRooms(),
-    hueClient.v2GetZones(),
-    hueClient.getGroups(),
-    hueClient.v2GetLights(),
-    hueClient.v2GetTemperature(),
-    hueClient.v2GetMotion(),
-    hueClient.v2GetLightLevel(),
-    hueClient.v2GetDevices(),
-    hueClient.v2GetDevicePower(),
-    hueClient.v2GetZigbeeConnectivity(),
-    hueClient.v2GetButtons(),
-    hueClient.getSensors()
-  ]);
+  const requests = [
+    { key: 'rooms', fn: () => hueClient.v2GetRooms() },
+    { key: 'zones', fn: () => hueClient.v2GetZones() },
+    { key: 'groups', fn: () => hueClient.getGroups() },
+    { key: 'lights', fn: () => hueClient.v2GetLights() },
+    { key: 'temperatures', fn: () => hueClient.v2GetTemperature() },
+    { key: 'motions', fn: () => hueClient.v2GetMotion() },
+    { key: 'lightLevels', fn: () => hueClient.v2GetLightLevel() },
+    { key: 'devices', fn: () => hueClient.v2GetDevices() },
+    { key: 'powers', fn: () => hueClient.v2GetDevicePower() },
+    { key: 'connectivities', fn: () => hueClient.v2GetZigbeeConnectivity() },
+    { key: 'buttons', fn: () => hueClient.v2GetButtons() },
+    { key: 'sensors', fn: () => hueClient.getSensors() }
+  ];
+  const settled = await Promise.allSettled(requests.map((request) => request.fn()));
 
   const asList = (resp) => (resp && Array.isArray(resp.data) ? resp.data : []);
   const asObj = (resp) => (resp && typeof resp === 'object' && !Array.isArray(resp) ? resp : {});
+  const fetchErrors = [];
+  const byKey = {};
+  settled.forEach((result, index) => {
+    const key = requests[index].key;
+    if (result.status === 'fulfilled') {
+      byKey[key] = result.value;
+      return;
+    }
+    byKey[key] = null;
+    fetchErrors.push(`${key}: ${normalizeSnapshotErrorMessage(result.reason)}`);
+  });
 
   return {
-    rooms: asList(roomsResp),
-    zones: asList(zonesResp),
-    groups: asObj(groupsData),
-    lights: asList(lightsResp),
-    temperatures: asList(tempResp),
-    motions: asList(motionResp),
-    lightLevels: asList(lightLevelResp),
-    devices: asList(deviceResp),
-    powers: asList(powerResp),
-    connectivities: asList(connectivityResp),
-    buttons: asList(buttonResp),
-    sensors: asObj(sensorsData)
+    rooms: asList(byKey.rooms),
+    zones: asList(byKey.zones),
+    groups: asObj(byKey.groups),
+    lights: asList(byKey.lights),
+    temperatures: asList(byKey.temperatures),
+    motions: asList(byKey.motions),
+    lightLevels: asList(byKey.lightLevels),
+    devices: asList(byKey.devices),
+    powers: asList(byKey.powers),
+    connectivities: asList(byKey.connectivities),
+    buttons: asList(byKey.buttons),
+    sensors: asObj(byKey.sensors),
+    fetchErrors
   };
 }
 
@@ -89,21 +102,29 @@ function buildDevicesForGroup(groupId, resources) {
       .map((child) => child.rid)
   );
 
-  const groupLightV1Ids = new Set((group.lights || []).map((id) => `/lights/${id}`));
-  const lightDeviceRids = new Set();
-  for (const light of lights) {
-    if (light.owner?.rid && groupLightV1Ids.has(light.id_v1)) lightDeviceRids.add(light.owner.rid);
-  }
-
-  for (const rid of roomDeviceRids) {
-    if (!lightDeviceRids.has(rid)) sensorDeviceRids.add(rid);
-  }
-
   const deviceToAreaV2Id = new Map();
   for (const area of [...rooms, ...zones]) {
     for (const child of (area.children || [])) {
       if (child.rtype === 'device') deviceToAreaV2Id.set(child.rid, area.id);
     }
+  }
+
+  const groupLightV1Ids = new Set((group.lights || []).map((id) => `/lights/${id}`));
+  const lightDeviceRids = new Set();
+  for (const light of lights) {
+    if (!light.owner?.rid) continue;
+    if (groupLightV1Ids.has(light.id_v1)) {
+      lightDeviceRids.add(light.owner.rid);
+      continue;
+    }
+    // v1 groups can be unavailable; fall back to room/zone area mapping.
+    if (roomV2Id && deviceToAreaV2Id.get(light.owner.rid) === roomV2Id) {
+      lightDeviceRids.add(light.owner.rid);
+    }
+  }
+
+  for (const rid of roomDeviceRids) {
+    if (!lightDeviceRids.has(rid)) sensorDeviceRids.add(rid);
   }
 
   const allServiceResources = [
@@ -388,10 +409,20 @@ class AccessorySnapshotService {
     const startedAt = Date.now();
     try {
       const resources = await fetchResources();
-      const groupIds = Object.keys(resources.groups || {}).filter((gid) => {
+      const groupIdsFromV1 = Object.keys(resources.groups || {}).filter((gid) => {
         const g = resources.groups[gid] || {};
         return g.type === 'Room' || (Array.isArray(g.sensors) && g.sensors.length > 0);
       });
+      const groupIdsFromV2 = [...resources.rooms, ...resources.zones]
+        .map((entry) => String(entry?.id_v1 || ''))
+        .filter((idv1) => idv1.startsWith('/groups/'))
+        .map((idv1) => idv1.replace('/groups/', '').split('/')[0])
+        .filter(Boolean);
+      const groupIds = Array.from(new Set([...groupIdsFromV1, ...groupIdsFromV2]));
+
+      const partialError = (resources.fetchErrors || []).length > 0
+        ? `Partial snapshot data: ${(resources.fetchErrors || []).join(' | ')}`
+        : null;
 
       const nextSnapshots = new Map();
       for (const groupId of groupIds) {
@@ -400,16 +431,17 @@ class AccessorySnapshotService {
           devices,
           stale: false,
           lastUpdated: Date.now(),
-          lastError: null
+          lastError: partialError
         });
       }
 
       this.snapshots = nextSnapshots;
-      this.lastError = null;
+      this.lastError = partialError;
       this.lastUpdated = Date.now();
       logger.info('ACCESSORY_SNAPSHOT_REFRESH_SUCCESS', 'Accessory snapshots refreshed', {
         durationMs: Date.now() - startedAt,
-        roomCount: nextSnapshots.size
+        roomCount: nextSnapshots.size,
+        partialFailures: (resources.fetchErrors || []).length
       });
     } catch (error) {
       this.lastError = normalizeSnapshotErrorMessage(error);
@@ -446,7 +478,7 @@ class AccessorySnapshotService {
     if (snapshot) return snapshot;
     return {
       devices: [],
-      stale: true,
+      stale: !this.lastUpdated,
       lastUpdated: this.lastUpdated,
       lastError: this.lastError
     };
