@@ -248,6 +248,12 @@ class HueClient {
     return this._v2Request('/light');
   }
 
+  // Sensor resource fetchers — used by GET /api/rooms/:groupId/devices
+  async v2GetTemperature() { return this._v2Request('/temperature'); }
+  async v2GetMotion()      { return this._v2Request('/motion'); }
+  async v2GetLightLevel()  { return this._v2Request('/light_level'); }
+  async v2GetDevices()     { return this._v2Request('/device'); }
+
   // Apply a named effect to a single light (candle, fire, sparkle, colorloop, no_effect, etc.)
   async v2SetLightEffect(v2LightId, effect) {
     return this._v2Request(`/light/${v2LightId}`, 'PUT', {

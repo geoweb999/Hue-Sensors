@@ -12,6 +12,7 @@ let roomColorWheel = null;
 // Room brightness slider state
 let roomBriSliderActive = false;
 let roomBriSendTimeout = null;
+let deviceData = [];
 
 // ── Color Conversion ──────────────────────────────────────────────
 
@@ -171,6 +172,23 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function celsiusToFahrenheit(c) {
+  return (c * 9 / 5) + 32;
+}
+
+function formatRelativeTime(isoTimestamp) {
+  if (!isoTimestamp) return 'Unknown';
+  const diffMs = Date.now() - new Date(isoTimestamp).getTime();
+  const s = Math.floor(diffMs / 1000);
+  if (s < 60) return 'Just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hr${h !== 1 ? 's' : ''} ago`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d !== 1 ? 's' : ''} ago`;
+}
+
 function setColorPickerRingColor(picker, colorHex = null) {
   if (!picker) return;
   const control = picker.closest('.color-picker-control');
@@ -194,6 +212,55 @@ function isDimmable(type) {
 }
 
 // ── Render ────────────────────────────────────────────────────────
+
+function renderDeviceCard(device) {
+  const rows = [];
+
+  if (device.temperature?.valid && device.temperature.celsius != null) {
+    const f = celsiusToFahrenheit(device.temperature.celsius).toFixed(1);
+    rows.push(`<div class="device-sensor-row">
+      <span class="device-sensor-label">Temp</span>
+      <span class="device-sensor-value">${f}°F</span>
+    </div>`);
+  }
+
+  if (device.motion?.valid) {
+    const active = device.motion.detected;
+    rows.push(`<div class="device-sensor-row">
+      <span class="device-sensor-label">Motion</span>
+      <span class="device-sensor-value${active ? ' motion-active' : ''}">${active ? 'Detected' : 'No motion'}</span>
+    </div>`);
+    if (device.motion.lastChanged) {
+      rows.push(`<div class="device-sensor-row">
+        <span class="device-sensor-label">Last seen</span>
+        <span class="device-sensor-value device-sensor-secondary">${formatRelativeTime(device.motion.lastChanged)}</span>
+      </div>`);
+    }
+  }
+
+  if (device.lightLevel?.valid && device.lightLevel.lux != null) {
+    rows.push(`<div class="device-sensor-row">
+      <span class="device-sensor-label">Light</span>
+      <span class="device-sensor-value">${Math.round(device.lightLevel.lux)} lux</span>
+    </div>`);
+  }
+
+  if (rows.length === 0) {
+    rows.push(`<p class="no-items-msg">No sensor data</p>`);
+  }
+
+  const name = escapeHtml(device.name || device.productName || 'Sensor');
+  return `<div class="device-card" data-rid="${escapeHtml(device.rid)}">
+    <div class="device-card-name" title="${name}">${name}</div>
+    <div class="device-sensors">${rows.join('')}</div>
+  </div>`;
+}
+
+function renderDevices(devices) {
+  const grid = document.getElementById('devices-grid');
+  if (!grid) return;
+  grid.innerHTML = (devices || []).map(renderDeviceCard).join('');
+}
 
 function renderLightCard(light) {
   const swatchColor = lightToSwatchCss(light);
@@ -467,9 +534,26 @@ async function fetchAndRenderRoom() {
     updateStatus('active', 'Connected');
     updateLastUpdateTime();
     renderRoom(data.room);
+    fetchAndRenderDevices(); // refresh sensor readings on every poll
   } catch (error) {
     showError(`Connection error: ${error.message}`);
     updateStatus('error', 'Connection failed');
+  }
+}
+
+async function fetchAndRenderDevices() {
+  try {
+    const res = await fetch(`/api/rooms/${roomId}/devices`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.success || !data.devices?.length) return;
+
+    deviceData = data.devices;
+    renderDevices(deviceData);
+    const section = document.getElementById('devices-section');
+    if (section) section.classList.remove('hidden');
+  } catch {
+    // v2 unavailable — section stays hidden silently
   }
 }
 

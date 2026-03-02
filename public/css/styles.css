@@ -1751,6 +1751,68 @@ body[data-theme="dark"] {
   padding: 1rem 0;
 }
 
+/* ── Sensor Device Cards (room page) ─────────────────────────────── */
+
+.devices-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.device-card {
+  background: #f8f8fb;
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.device-card-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #333;
+  margin-bottom: 0.6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-sensors {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.device-sensor-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.device-sensor-label {
+  font-size: 0.75rem;
+  color: #888;
+  flex-shrink: 0;
+}
+
+.device-sensor-value {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #444;
+  text-align: right;
+}
+
+.device-sensor-value.device-sensor-secondary {
+  font-weight: 400;
+  color: #999;
+  font-size: 0.75rem;
+}
+
+.device-sensor-value.motion-active {
+  color: #27ae60;
+}
+
 /* ── Room Page Dark Mode ─────────────────────────────────────────── */
 
 [data-theme="dark"] .back-btn {
@@ -1940,6 +2002,10 @@ body[data-theme="dark"] {
 
   .scenes-subgrid {
     grid-template-columns: 1fr;
+  }
+
+  .devices-grid {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
@@ -2273,6 +2339,13 @@ body[data-theme="dark"] {
 .anim-add-frame-btn:hover { border-color: #667eea; color: #667eea; }
 [data-theme="dark"] .anim-add-frame-btn { color: #aaa; border-color: #555; }
 [data-theme="dark"] .anim-add-frame-btn:hover { border-color: #8b9cf7; color: #8b9cf7; }
+
+[data-theme="dark"] .device-card { background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.06); }
+[data-theme="dark"] .device-card-name { color: #e0e0e0; }
+[data-theme="dark"] .device-sensor-label { color: #666; }
+[data-theme="dark"] .device-sensor-value { color: #ccc; }
+[data-theme="dark"] .device-sensor-value.device-sensor-secondary { color: #666; }
+[data-theme="dark"] .device-sensor-value.motion-active { color: #4ade80; }
 
 .anim-speed-slider {
   width: 100%;

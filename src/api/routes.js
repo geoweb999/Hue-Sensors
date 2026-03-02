@@ -523,6 +523,7 @@ async function resolveV2Ids(v1GroupId) {
   // rejects scene actions that reference lights outside the group.
   const lightIdMap = {};
   const lightCapMap = {};  // v2LightId → { hasDimming, hasColor }
+  const lightDeviceRids = new Set();
   for (const light of lights) {
     if (light.id_v1 && light.owner && roomDeviceRids.has(light.owner.rid)) {
       const v1Id = light.id_v1.replace('/lights/', '');
@@ -531,11 +532,92 @@ async function resolveV2Ids(v1GroupId) {
         hasDimming: 'dimming' in light,
         hasColor: 'color' in light
       };
+      lightDeviceRids.add(light.owner.rid);
     }
   }
 
-  return { roomV2Id: room.id, groupedLightId: glService.rid, lightIdMap, lightCapMap };
+  return { roomV2Id: room.id, groupedLightId: glService.rid, lightIdMap, lightCapMap, roomDeviceRids, lightDeviceRids };
 }
+
+// GET /api/rooms/:groupId/devices - sensor devices in this room (via Hue API v2)
+// Returns temperature, motion, and light-level readings for non-light devices.
+// Fails silently (empty array) if v2 is unavailable so the rest of the room page is unaffected.
+router.get('/rooms/:groupId/devices', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+
+    const { roomDeviceRids, lightDeviceRids } = await resolveV2Ids(groupId);
+
+    // Sensor devices = room devices that are NOT lights (e.g. motion sensors)
+    const sensorDeviceRids = [...roomDeviceRids].filter(rid => !lightDeviceRids.has(rid));
+    if (sensorDeviceRids.length === 0) return res.json({ success: true, devices: [] });
+
+    const [tempResp, motionResp, lightLevelResp, deviceResp] = await Promise.all([
+      hueClient.v2GetTemperature(),
+      hueClient.v2GetMotion(),
+      hueClient.v2GetLightLevel(),
+      hueClient.v2GetDevices()
+    ]);
+
+    const sensorRidSet = new Set(sensorDeviceRids);
+
+    // Build device name/product map
+    const deviceById = {};
+    for (const d of deviceResp.data || []) {
+      if (sensorRidSet.has(d.id)) {
+        deviceById[d.id] = {
+          name: d.metadata?.name,
+          productName: d.product_data?.product_name
+        };
+      }
+    }
+
+    // Seed device map
+    const deviceMap = {};
+    for (const rid of sensorDeviceRids) {
+      deviceMap[rid] = { rid, ...(deviceById[rid] || {}), temperature: null, motion: null, lightLevel: null };
+    }
+
+    // Merge temperature readings
+    for (const t of tempResp.data || []) {
+      const rid = t.owner?.rid;
+      if (deviceMap[rid]) {
+        deviceMap[rid].temperature = {
+          celsius: t.temperature?.temperature ?? null,
+          valid: t.temperature?.temperature_valid ?? false
+        };
+      }
+    }
+
+    // Merge motion readings
+    for (const m of motionResp.data || []) {
+      const rid = m.owner?.rid;
+      if (deviceMap[rid]) {
+        deviceMap[rid].motion = {
+          detected: m.motion?.motion ?? false,
+          valid: m.motion?.motion_valid ?? false,
+          lastChanged: m.motion_report?.changed ?? null
+        };
+      }
+    }
+
+    // Merge light-level readings
+    for (const l of lightLevelResp.data || []) {
+      const rid = l.owner?.rid;
+      if (deviceMap[rid]) {
+        deviceMap[rid].lightLevel = {
+          lux: l.light?.light_level_lux ?? null,
+          valid: l.light?.light_level_valid ?? false
+        };
+      }
+    }
+
+    res.json({ success: true, devices: Object.values(deviceMap) });
+  } catch (err) {
+    logger.error('DEVICES_FETCH_ERROR', 'Failed to fetch room sensor devices', { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // GET /api/v2/rooms/:groupId/info - v2 IDs for a room (used by frontend on page load)
 router.get('/v2/rooms/:groupId/info', async (req, res) => {
