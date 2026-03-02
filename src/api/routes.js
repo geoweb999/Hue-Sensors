@@ -1385,8 +1385,9 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
   try {
     const { groupId } = req.params;
 
-    // Fetch all resources in parallel (do not require grouped_light mapping for accessory discovery)
-    const [roomsResp, groupsData, lightsResp, tempResp, motionResp, lightLevelResp, deviceResp, powerResp, connectivityResp, buttonResp] = await Promise.all([
+    // Fetch all resources in parallel; tolerate partial failures so one failing
+    // bridge endpoint doesn't wipe accessories for every room.
+    const resourceResults = await Promise.allSettled([
       hueClient.v2GetRooms(),
       hueClient.getGroups(),
       hueClient.v2GetLights(),
@@ -1396,10 +1397,44 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       hueClient.v2GetDevices(),
       hueClient.v2GetDevicePower(),
       hueClient.v2GetZigbeeConnectivity(),
-      hueClient.v2GetButtons()
+      hueClient.v2GetButtons(),
+      hueClient.getSensors()
     ]);
+    const pick = (index, fallback, label) => {
+      const result = resourceResults[index];
+      if (result.status === 'fulfilled') return result.value;
+      logger.warn('DEVICES_RESOURCE_FETCH_FAILED', 'Accessory resource fetch failed; using fallback data', {
+        groupId,
+        resource: label,
+        error: result.reason?.message || String(result.reason || 'unknown error')
+      });
+      return fallback;
+    };
+    const roomsResp = pick(0, { data: [] }, 'v2/room');
+    const groupsData = pick(1, {}, 'v1/groups');
+    const lightsResp = pick(2, { data: [] }, 'v2/light');
+    const tempResp = pick(3, { data: [] }, 'v2/temperature');
+    const motionResp = pick(4, { data: [] }, 'v2/motion');
+    const lightLevelResp = pick(5, { data: [] }, 'v2/light_level');
+    const deviceResp = pick(6, { data: [] }, 'v2/device');
+    const powerResp = pick(7, { data: [] }, 'v2/device_power');
+    const connectivityResp = pick(8, { data: [] }, 'v2/zigbee_connectivity');
+    const buttonResp = pick(9, { data: [] }, 'v2/button');
+    const sensorsData = pick(10, {}, 'v1/sensors');
 
     const sensorDeviceRids = new Set();
+    const serviceRidToDeviceRid = new Map();
+    for (const d of (deviceResp.data || [])) {
+      for (const svc of (d.services || [])) {
+        if (svc?.rid) serviceRidToDeviceRid.set(svc.rid, d.id);
+      }
+    }
+    const resolveResourceDeviceRid = (resource) => {
+      const ownerRid = resource?.owner?.rid;
+      if (!ownerRid) return null;
+      // Most bridge payloads use owner=device, but some resources can point to a service RID.
+      return serviceRidToDeviceRid.get(ownerRid) || ownerRid;
+    };
     const room = (roomsResp.data || []).find((entry) => entry.id_v1 === `/groups/${groupId}`) || null;
     const roomV2Id = room?.id || null;
     const roomDeviceRids = new Set(
@@ -1438,9 +1473,19 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       ...(powerResp.data || []),
       ...(connectivityResp.data || [])
     ];
+    const sensorServiceIdToDeviceRid = new Map();
+    for (const svc of allServiceResources) {
+      const rid = resolveResourceDeviceRid(svc);
+      const idv1 = String(svc?.id_v1 || '');
+      if (rid && idv1.startsWith('/sensors/')) {
+        const parts = idv1.split('/');
+        const sensorId = parts[2];
+        if (sensorId) sensorServiceIdToDeviceRid.set(sensorId, rid);
+      }
+    }
     if (roomV2Id) {
       for (const svc of allServiceResources) {
-        const ownerRid = svc.owner?.rid;
+        const ownerRid = resolveResourceDeviceRid(svc);
         if (ownerRid && deviceToRoomV2Id.get(ownerRid) === roomV2Id && !lightDeviceRids.has(ownerRid)) {
           sensorDeviceRids.add(ownerRid);
         }
@@ -1450,9 +1495,12 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
     // Method C — v1 group.sensors via service resource id_v1. Catches accessories not
     // reflected in v2 room.children at all (older bridge firmware, un-synced assignments).
     const v1SensorIds = new Set((groupsData[groupId]?.sensors || []).map(id => `/sensors/${id}`));
+    const v1SensorIdPrefixes = [...v1SensorIds].map((base) => `${base}/`);
     for (const svc of allServiceResources) {
-      const ownerRid = svc.owner?.rid;
-      if (ownerRid && svc.id_v1 && v1SensorIds.has(svc.id_v1) && !lightDeviceRids.has(ownerRid)) {
+      const ownerRid = resolveResourceDeviceRid(svc);
+      const svcIdV1 = String(svc.id_v1 || '');
+      const isGroupSensor = v1SensorIds.has(svcIdV1) || v1SensorIdPrefixes.some((prefix) => svcIdV1.startsWith(prefix));
+      if (ownerRid && svcIdV1 && isGroupSensor && !lightDeviceRids.has(ownerRid)) {
         sensorDeviceRids.add(ownerRid);
       }
     }
@@ -1474,8 +1522,6 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       totalFound: sensorDeviceRids.size
     });
 
-    if (sensorDeviceRids.size === 0) return res.json({ success: true, devices: [] });
-
     // Build device name/product map
     const deviceById = {};
     for (const d of deviceResp.data || []) {
@@ -1496,7 +1542,7 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
 
     // Merge temperature readings
     for (const t of tempResp.data || []) {
-      const rid = t.owner?.rid;
+      const rid = resolveResourceDeviceRid(t);
       if (deviceMap[rid]) {
         deviceMap[rid].temperature = {
           celsius: t.temperature?.temperature ?? null,
@@ -1507,7 +1553,7 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
 
     // Merge motion readings
     for (const m of motionResp.data || []) {
-      const rid = m.owner?.rid;
+      const rid = resolveResourceDeviceRid(m);
       if (deviceMap[rid]) {
         deviceMap[rid].motion = {
           detected: m.motion?.motion ?? false,
@@ -1519,7 +1565,7 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
 
     // Merge light-level readings
     for (const l of lightLevelResp.data || []) {
-      const rid = l.owner?.rid;
+      const rid = resolveResourceDeviceRid(l);
       if (deviceMap[rid]) {
         deviceMap[rid].lightLevel = {
           lux: l.light?.light_level_lux ?? null,
@@ -1530,7 +1576,7 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
 
     // Merge battery / power state
     for (const p of powerResp.data || []) {
-      const rid = p.owner?.rid;
+      const rid = resolveResourceDeviceRid(p);
       if (deviceMap[rid]) {
         deviceMap[rid].battery = {
           level: p.power_state?.battery_level ?? null,
@@ -1541,7 +1587,7 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
 
     // Merge Zigbee connectivity
     for (const z of connectivityResp.data || []) {
-      const rid = z.owner?.rid;
+      const rid = resolveResourceDeviceRid(z);
       if (deviceMap[rid]) {
         deviceMap[rid].connectivity = {
           status: z.status ?? null
@@ -1553,11 +1599,14 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
     // Handle bridge variants where last event is exposed as button.last_event.
     const buttonsByDevice = {};
     for (const b of buttonResp.data || []) {
-      const rid = b.owner?.rid;
+      const rid = resolveResourceDeviceRid(b);
       if (!deviceMap[rid]) continue;
       if (!buttonsByDevice[rid]) buttonsByDevice[rid] = [];
       const controlIdRaw = b.metadata?.control_id ?? null;
-      const controlId = Number.isFinite(Number(controlIdRaw)) ? Number(controlIdRaw) : null;
+      const controlIdDirect = Number(controlIdRaw);
+      const controlId = Number.isFinite(controlIdDirect)
+        ? controlIdDirect
+        : (typeof controlIdRaw === 'string' && /(\d+)$/.test(controlIdRaw) ? Number(controlIdRaw.match(/(\d+)$/)[1]) : null);
       const reportEvent = b.button?.button_report?.event ?? null;
       const reportUpdated = b.button?.button_report?.updated ?? null;
       const lastEvent = reportEvent || b.button?.last_event || null;
@@ -1570,6 +1619,116 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
     }
     for (const [rid, btns] of Object.entries(buttonsByDevice)) {
       deviceMap[rid].buttons = btns.sort((a, b) => (a.controlId ?? 99) - (b.controlId ?? 99));
+    }
+
+    // V1 fallback: merge room sensors directly from /groups/:id sensors list.
+    // This catches bridges where v2 resource ownership/id_v1 is incomplete.
+    const groupSensorIds = (groupsData[groupId]?.sensors || []).map((id) => String(id));
+    const v1SensorIdToDeviceRid = new Map();
+    const v1UniqueBaseToDeviceRid = new Map();
+    for (const [sid, rid] of sensorServiceIdToDeviceRid.entries()) {
+      v1SensorIdToDeviceRid.set(sid, rid);
+    }
+    // Fallback for bridges that do not expose id_v1 on service resources.
+    for (const d of (deviceResp.data || [])) {
+      const idv1 = String(d.id_v1 || '');
+      if (!idv1.startsWith('/sensors/')) continue;
+      const sid = idv1.replace('/sensors/', '').split('/')[0];
+      if (sid && !v1SensorIdToDeviceRid.has(sid)) {
+        v1SensorIdToDeviceRid.set(sid, d.id);
+      }
+    }
+    for (const sid of groupSensorIds) {
+      const s = sensorsData?.[sid];
+      const rid = v1SensorIdToDeviceRid.get(sid);
+      const base = String(s?.uniqueid || '').split('-')[0] || null;
+      if (rid && base) v1UniqueBaseToDeviceRid.set(base, rid);
+    }
+    const ensureDevice = (rid, name) => {
+      if (!deviceMap[rid]) {
+        deviceMap[rid] = { rid, name, productName: null, productArchetype: null, temperature: null, motion: null, lightLevel: null, battery: null, connectivity: null, buttons: [] };
+      } else if (!deviceMap[rid].name && name) {
+        deviceMap[rid].name = name;
+      }
+    };
+    const normalizeV1Ts = (ts) => {
+      if (!ts || ts === 'none') return null;
+      return ts.endsWith('Z') ? ts : `${ts}Z`;
+    };
+    const v1ButtonEventToV2 = (value) => {
+      const code = Number(value);
+      if (!Number.isFinite(code) || code <= 0) return { controlId: null, event: null };
+      const controlId = Math.floor(code / 1000);
+      const eventCode = code % 1000;
+      const event = eventCode === 0 ? 'initial_press'
+        : eventCode === 1 ? 'repeat'
+        : eventCode === 2 ? 'short_release'
+        : eventCode === 3 ? 'long_release'
+        : null;
+      return { controlId, event };
+    };
+
+    for (const sid of groupSensorIds) {
+      const sensor = sensorsData?.[sid];
+      if (!sensor) continue;
+      const base = String(sensor.uniqueid || '').split('-')[0] || null;
+      const rid = v1SensorIdToDeviceRid.get(sid) || (base ? v1UniqueBaseToDeviceRid.get(base) : null) || `v1:${sid}`;
+      ensureDevice(rid, sensor.name || `Sensor ${sid}`);
+      sensorDeviceRids.add(rid);
+
+      if (sensor?.config?.battery != null) {
+        deviceMap[rid].battery = { level: sensor.config.battery, state: null };
+      }
+      if (sensor?.config?.reachable != null) {
+        deviceMap[rid].connectivity = { status: sensor.config.reachable ? 'connected' : 'disconnected' };
+      }
+
+      const type = String(sensor.type || '').toLowerCase();
+      if (type.includes('presence')) {
+        deviceMap[rid].motion = {
+          detected: !!sensor.state?.presence,
+          valid: true,
+          lastChanged: normalizeV1Ts(sensor.state?.lastupdated)
+        };
+      }
+
+      if (type.includes('temperature') && sensor.state?.temperature != null) {
+        deviceMap[rid].temperature = {
+          celsius: Number(sensor.state.temperature) / 100,
+          valid: true
+        };
+      }
+
+      if (type.includes('lightlevel') && sensor.state?.lightlevel != null) {
+        const raw = Number(sensor.state.lightlevel);
+        const lux = Number.isFinite(raw) ? Math.round(Math.pow(10, (raw - 1) / 10000)) : null;
+        deviceMap[rid].lightLevel = {
+          lux,
+          valid: lux != null
+        };
+      }
+
+      if (sensor.state?.buttonevent != null) {
+        const mapped = v1ButtonEventToV2(sensor.state.buttonevent);
+        const row = {
+          controlId: mapped.controlId,
+          lastEvent: mapped.event,
+          lastUpdated: normalizeV1Ts(sensor.state?.lastupdated)
+        };
+        const existing = deviceMap[rid].buttons.findIndex((b) => b.controlId === row.controlId);
+        if (existing >= 0) {
+          deviceMap[rid].buttons[existing] = row;
+        } else {
+          deviceMap[rid].buttons.push(row);
+        }
+      }
+    }
+
+    // Sort again after v1 fallback merge.
+    for (const entry of Object.values(deviceMap)) {
+      if (Array.isArray(entry.buttons) && entry.buttons.length > 1) {
+        entry.buttons.sort((a, b) => (a.controlId ?? 99) - (b.controlId ?? 99));
+      }
     }
 
     res.json({ success: true, devices: Object.values(deviceMap) });

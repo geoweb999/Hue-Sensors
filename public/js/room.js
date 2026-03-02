@@ -344,8 +344,8 @@ function openDimmerModal(device) {
   document.getElementById('dimmer-modal-meta').innerHTML = metaParts.join('<span class="dimmer-meta-sep">·</span>');
 
   // Button rows
-  const rows = (device.buttons || []).map(btn => {
-    const label = DIMMER_BUTTON_LABELS[btn.controlId] || `Button ${btn.controlId}`;
+  const rows = (device.buttons || []).map((btn, index) => {
+    const label = DIMMER_BUTTON_LABELS[btn.controlId] || `Button ${btn.controlId ?? (index + 1)}`;
     const eventLabel = btn.lastEvent ? (DIMMER_EVENT_LABELS[btn.lastEvent] || btn.lastEvent) : null;
     const timeLabel = btn.lastUpdated ? formatRelativeTime(btn.lastUpdated) : null;
     const hasActivity = eventLabel || timeLabel;
