@@ -19,6 +19,17 @@ const SURPRISE_PALETTE_LIBRARY_KEY = 'hueSurprisePaletteLibrary';
 let roomBriSliderActive = false;
 let roomBriSendTimeout = null;
 let deviceData = [];
+let deviceSnapshotMeta = {
+  stale: true,
+  lastUpdated: null,
+  lastError: null
+};
+const ROOM_OPS_MODE_DESCRIPTIONS = {
+  timeline: 'Live room operations with bridge snapshot diagnostics and accessory health.',
+  studio: 'Control Studio combines scene launch points and light state distribution in one panel.'
+};
+const ROOM_OPS_MODE_STORAGE_KEY = 'roomOpsMode';
+let currentRoomOpsMode = 'timeline';
 
 function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -197,6 +208,13 @@ function formatRelativeTime(isoTimestamp) {
   if (h < 24) return `${h} hr${h !== 1 ? 's' : ''} ago`;
   const d = Math.floor(h / 24);
   return `${d} day${d !== 1 ? 's' : ''} ago`;
+}
+
+function formatDateTime(value) {
+  if (value == null) return 'Unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return date.toLocaleString();
 }
 
 function setColorPickerRingColor(picker, colorHex = null) {
@@ -658,6 +676,8 @@ function renderRoom(data) {
   // Animation effects section — always show (v2 check happens inside initAnimationSection)
   const animSection = document.getElementById('anim-section');
   if (animSection) animSection.classList.remove('hidden');
+
+  renderRoomLayoutShowcase();
 }
 
 // ── Status helpers ────────────────────────────────────────────────
@@ -712,13 +732,174 @@ async function fetchAndRenderDevices() {
     if (!data.success) throw new Error(data.error || 'Failed to fetch room accessories');
 
     deviceData = Array.isArray(data.devices) ? data.devices : [];
+    deviceSnapshotMeta = {
+      stale: !!data.stale,
+      lastUpdated: data.lastUpdated ?? null,
+      lastError: data.lastError ?? null
+    };
     renderDevices(deviceData);
     section.classList.remove('hidden');
+    renderRoomLayoutShowcase();
   } catch {
     deviceData = [];
+    deviceSnapshotMeta = {
+      stale: true,
+      lastUpdated: null,
+      lastError: 'Accessory snapshot unavailable'
+    };
     grid.innerHTML = '';
     section.classList.add('hidden');
+    renderRoomLayoutShowcase();
   }
+}
+
+function buildNowCards() {
+  const lights = roomData?.lights || [];
+  const devices = deviceData || [];
+  const onCount = lights.filter((l) => l.on && l.reachable).length;
+  const unreachableCount = lights.filter((l) => !l.reachable).length;
+  const dimmerCount = devices.filter((d) => d.deviceKind === 'dimmer' || (d.buttons || []).length > 0).length;
+  const motionDetectedCount = devices.filter((d) => d.motion?.valid && d.motion.detected).length;
+  const tempDevice = devices.find((d) => d.temperature?.valid && Number.isFinite(d.temperature.celsius));
+  const staleState = deviceSnapshotMeta.stale ? 'Stale' : 'Fresh';
+  const staleUpdated = deviceSnapshotMeta.lastUpdated ? ` (${formatRelativeTime(deviceSnapshotMeta.lastUpdated)})` : '';
+
+  return [
+    { label: 'Lights', value: `${onCount}/${lights.length} on` },
+    { label: 'Unreachable Lights', value: String(unreachableCount) },
+    { label: 'Motions Active', value: String(motionDetectedCount) },
+    { label: 'Dimmers', value: String(dimmerCount) },
+    { label: 'Temperature', value: tempDevice ? `${celsiusToFahrenheit(tempDevice.temperature.celsius).toFixed(1)}°F` : 'Unknown' },
+    { label: 'Snapshot', value: `${staleState}${staleUpdated}` }
+  ];
+}
+
+function renderRoomLayoutShowcase() {
+  const el = document.getElementById('room-layout-showcase');
+  if (!el) return;
+
+  if (!roomData) {
+    el.classList.add('hidden');
+    return;
+  }
+
+  const cards = buildNowCards();
+  const lights = roomData?.lights || [];
+  const devices = deviceData || [];
+  const connectedCount = devices.filter((d) => d.connectivity?.status === 'connected').length;
+  const disconnectedCount = devices.filter((d) => d.connectivity?.status && d.connectivity.status !== 'connected').length;
+  const batteryLowCount = devices.filter((d) => d.battery && (d.battery.state === 'low' || (d.battery.level != null && d.battery.level <= 20))).length;
+  const batteryCriticalCount = devices.filter((d) => d.battery && (d.battery.state === 'critical' || (d.battery.level != null && d.battery.level <= 5))).length;
+  const motionCapableCount = devices.filter((d) => d.motion != null).length;
+  const sensorCount = devices.filter((d) => d.deviceKind !== 'dimmer').length;
+  const dimmerCount = devices.filter((d) => d.deviceKind === 'dimmer' || (d.buttons || []).length > 0).length;
+  const schedulesCount = (roomData?.schedules || []).length;
+  const rulesCount = (roomData?.rules || []).length;
+  const timelineRows = [
+    `Snapshot ${deviceSnapshotMeta.stale ? 'stale' : 'fresh'} as of ${formatDateTime(deviceSnapshotMeta.lastUpdated)}`,
+    `${lights.filter((l) => l.on && l.reachable).length} lights on, ${lights.filter((l) => !l.reachable).length} unreachable`,
+    `${motionCapableCount} motion-capable accessories, ${devices.filter((d) => d.motion?.valid && d.motion.detected).length} currently detecting`,
+    `${rulesCount} rule automations and ${schedulesCount} schedules configured`
+  ];
+
+  el.className = 'room-layout-showcase';
+  el.classList.remove('hidden');
+
+  if (currentRoomOpsMode === 'studio') {
+    const scenes = (roomData?.scenes || []).slice(0, 10);
+    const onLights = lights.filter((l) => l.on).length;
+    const unreachableLights = lights.filter((l) => !l.reachable).length;
+    const colorLights = lights.filter((l) => isColorLight(l.type)).length;
+    const dimmableLights = lights.filter((l) => isDimmable(l.type)).length;
+    const matrix = lights.slice(0, 16).map((light) =>
+      `<span class="mock-dot ${light.on ? 'on' : ''} ${light.reachable ? '' : 'offline'}" title="${escapeHtml(light.name)}"></span>`
+    ).join('');
+
+    el.innerHTML = `
+      <div class="room-layout-grid two-col">
+        <section class="mock-panel">
+          <h3>Scene Launch Deck</h3>
+          <div class="mock-chip-row">
+            ${scenes.length > 0
+              ? scenes.map((scene) => `<span class="mock-chip">${escapeHtml(scene.name)}</span>`).join('')
+              : '<span class="mock-chip">No scenes available</span>'}
+          </div>
+          <ul class="mock-list">
+            <li>Lights active: ${onLights}/${lights.length}</li>
+            <li>Color-capable lights: ${colorLights}</li>
+            <li>Dimmable lights: ${dimmableLights}</li>
+          </ul>
+        </section>
+        <section class="mock-panel">
+          <h3>Fixture Matrix</h3>
+          <div class="mock-matrix">${matrix || '<span class="mock-empty">No lights</span>'}</div>
+          <ul class="mock-list">
+            <li>Snapshot status: ${deviceSnapshotMeta.stale ? 'Stale' : 'Fresh'}</li>
+            <li>Unreachable fixtures: ${unreachableLights}</li>
+            <li>Connected accessories: ${connectedCount}</li>
+          </ul>
+        </section>
+      </div>
+    `;
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="mock-nowcards">
+      ${cards.map((card) => `<article class="mock-nowcard"><span>${escapeHtml(card.label)}</span><strong>${escapeHtml(card.value)}</strong></article>`).join('')}
+    </div>
+    <div class="room-layout-grid two-col">
+      <section class="mock-panel">
+        <h3>Activity Timeline</h3>
+        <ul class="mock-list">${timelineRows.map((row) => `<li>${escapeHtml(row)}</li>`).join('')}</ul>
+      </section>
+      <section class="mock-panel">
+        <h3>Bridge Diagnostics</h3>
+        <ul class="mock-list">
+          <li>Snapshot status: ${deviceSnapshotMeta.stale ? 'Stale' : 'Fresh'}</li>
+          <li>Snapshot updated: ${escapeHtml(formatDateTime(deviceSnapshotMeta.lastUpdated))}</li>
+          <li>Snapshot error: ${escapeHtml(deviceSnapshotMeta.lastError || 'None')}</li>
+          <li>Accessories: ${devices.length} total (${sensorCount} sensors, ${dimmerCount} dimmers)</li>
+          <li>Connectivity: ${connectedCount} connected, ${disconnectedCount} disconnected</li>
+          <li>Battery health: ${batteryLowCount} low, ${batteryCriticalCount} critical</li>
+        </ul>
+      </section>
+    </div>
+  `;
+}
+
+function setRoomOpsMode(mode) {
+  if (!ROOM_OPS_MODE_DESCRIPTIONS[mode]) return;
+  currentRoomOpsMode = mode;
+  localStorage.setItem(ROOM_OPS_MODE_STORAGE_KEY, mode);
+
+  const description = document.getElementById('room-ops-mode-description');
+  if (description) description.textContent = ROOM_OPS_MODE_DESCRIPTIONS[mode];
+
+  const group = document.getElementById('room-ops-mode-group');
+  if (group) {
+    for (const button of group.querySelectorAll('.layout-mode-btn')) {
+      button.classList.toggle('active', button.dataset.roomOpsMode === mode);
+    }
+  }
+
+  renderRoomLayoutShowcase();
+}
+
+function initRoomOpsModePicker() {
+  const savedMode = localStorage.getItem(ROOM_OPS_MODE_STORAGE_KEY);
+  if (savedMode && ROOM_OPS_MODE_DESCRIPTIONS[savedMode]) {
+    currentRoomOpsMode = savedMode;
+  }
+
+  const group = document.getElementById('room-ops-mode-group');
+  if (!group) return;
+  group.addEventListener('click', (event) => {
+    const button = event.target.closest('.layout-mode-btn');
+    if (!button) return;
+    setRoomOpsMode(button.dataset.roomOpsMode);
+  });
+  setRoomOpsMode(currentRoomOpsMode);
 }
 
 // ── Light controls ────────────────────────────────────────────────
@@ -2510,6 +2691,7 @@ async function init() {
   initSurpriseEditorModal();
   initAnimBuilderModal();
   initDimmerModal();
+  initRoomOpsModePicker();
 
   await fetchAndRenderRoom();
   refreshIntervalId = setInterval(fetchAndRenderRoom, REFRESH_INTERVAL);

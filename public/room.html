@@ -34,6 +34,17 @@
   </header>
 
   <main>
+    <section class="layout-lab room-layout-lab" aria-label="Timeline operations">
+      <div class="layout-lab-title">Timeline Ops</div>
+      <div class="layout-mode-group" id="room-ops-mode-group">
+        <button type="button" class="layout-mode-btn active" data-room-ops-mode="timeline">Timeline Ops</button>
+        <button type="button" class="layout-mode-btn" data-room-ops-mode="studio">Control Studio</button>
+      </div>
+      <p id="room-ops-mode-description" class="layout-mode-description">
+        Live room operations with bridge snapshot diagnostics and accessory health.
+      </p>
+    </section>
+
     <div id="loading" class="loading">
       <div class="spinner"></div>
       <p>Loading room data...</p>
@@ -42,6 +53,8 @@
     <div id="error" class="error hidden">
       <p id="error-message"></p>
     </div>
+
+    <section id="room-layout-showcase" class="room-layout-showcase hidden" aria-live="polite"></section>
 
     <!-- Room brightness bar -->
     <div id="room-page-brightness" class="room-page-brightness hidden">
