@@ -77,6 +77,10 @@ const SURPRISE_STYLES = [
   }
 ];
 
+// Keep the last good accessory payload per room to avoid UI flip-flop when
+// the bridge intermittently fails one of the resource endpoints.
+const roomAccessoriesCache = new Map();
+
 const SURPRISE_STYLE_MAP = new Map(SURPRISE_STYLES.map((style) => [style.id, style]));
 
 function clamp(value, min, max) {
@@ -1384,6 +1388,7 @@ async function resolveV2Ids(v1GroupId) {
 router.get('/rooms/:groupId/devices', async (req, res) => {
   try {
     const { groupId } = req.params;
+    let hadResourceFailure = false;
 
     // Fetch all resources in parallel; tolerate partial failures so one failing
     // bridge endpoint doesn't wipe accessories for every room.
@@ -1403,6 +1408,7 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
     const pick = (index, fallback, label) => {
       const result = resourceResults[index];
       if (result.status === 'fulfilled') return result.value;
+      hadResourceFailure = true;
       logger.warn('DEVICES_RESOURCE_FETCH_FAILED', 'Accessory resource fetch failed; using fallback data', {
         groupId,
         resource: label,
@@ -1731,8 +1737,41 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       }
     }
 
-    res.json({ success: true, devices: Object.values(deviceMap) });
+    const devices = Object.values(deviceMap).sort((a, b) => {
+      const nameA = String(a.name || a.productName || '').toLowerCase();
+      const nameB = String(b.name || b.productName || '').toLowerCase();
+      if (nameA !== nameB) return nameA.localeCompare(nameB);
+      return String(a.rid || '').localeCompare(String(b.rid || ''));
+    });
+
+    // If any resource failed, prefer the last good snapshot for consistency.
+    if (hadResourceFailure) {
+      const cached = roomAccessoriesCache.get(groupId);
+      if (cached?.devices?.length) {
+        logger.warn('DEVICES_CACHE_FALLBACK', 'Returning cached room accessories due to partial resource failure', {
+          groupId,
+          cachedCount: cached.devices.length
+        });
+        return res.json({ success: true, devices: cached.devices });
+      }
+    }
+
+    roomAccessoriesCache.set(groupId, {
+      devices,
+      updatedAt: Date.now()
+    });
+
+    res.json({ success: true, devices });
   } catch (err) {
+    const cached = roomAccessoriesCache.get(req.params.groupId);
+    if (cached?.devices?.length) {
+      logger.warn('DEVICES_CACHE_FALLBACK_ERROR', 'Returning cached room accessories after fetch error', {
+        groupId: req.params.groupId,
+        cachedCount: cached.devices.length,
+        error: err.message
+      });
+      return res.json({ success: true, devices: cached.devices });
+    }
     logger.warn('DEVICES_FETCH_ERROR', 'Failed to fetch room sensor devices; returning empty list', { error: err.message });
     res.json({ success: true, devices: [] });
   }
