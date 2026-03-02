@@ -1335,10 +1335,11 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
   try {
     const { groupId } = req.params;
 
-    const { roomDeviceRids, lightDeviceRids } = await resolveV2Ids(groupId);
+    const { roomV2Id, roomDeviceRids, lightDeviceRids } = await resolveV2Ids(groupId);
 
-    // Fetch all resources in parallel (groups needed for v1 sensor fallback)
-    const [groupsData, tempResp, motionResp, lightLevelResp, deviceResp, powerResp, connectivityResp, buttonResp] = await Promise.all([
+    // Fetch all resources in parallel — rooms needed to build device→room map
+    const [roomsResp, groupsData, tempResp, motionResp, lightLevelResp, deviceResp, powerResp, connectivityResp, buttonResp] = await Promise.all([
+      hueClient.v2GetRooms(),
       hueClient.getGroups(),
       hueClient.v2GetTemperature(),
       hueClient.v2GetMotion(),
@@ -1349,26 +1350,56 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       hueClient.v2GetButtons()
     ]);
 
-    // Primary: devices in v2 room.children that aren't lights
-    const sensorDeviceRids = new Set([...roomDeviceRids].filter(rid => !lightDeviceRids.has(rid)));
+    const sensorDeviceRids = new Set();
 
-    // Supplement: v1 group.sensors is the authoritative list of every sensor/switch assigned
-    // to the room. The reliable id_v1 fields live on the *service* resources (temperature,
-    // motion, light_level, button) — not on the device resource itself — so we scan those
-    // and follow owner.rid back to the device.
-    const v1SensorIds = new Set((groupsData[groupId]?.sensors || []).map(id => `/sensors/${id}`));
-    const serviceResources = [
+    // Method A — v2 room.children (direct device entries for our room)
+    for (const rid of roomDeviceRids) {
+      if (!lightDeviceRids.has(rid)) sensorDeviceRids.add(rid);
+    }
+
+    // Method B — full device→room map built from ALL rooms' children, then matched via
+    // service resource owner.rid. Catches accessories whose device entry appears in
+    // room.children on some bridge firmware versions but wasn't caught by Method A.
+    const deviceToRoomV2Id = new Map();
+    for (const r of (roomsResp.data || [])) {
+      for (const child of (r.children || [])) {
+        if (child.rtype === 'device') deviceToRoomV2Id.set(child.rid, r.id);
+      }
+    }
+    // All service resources — use all fetched types to maximise device coverage
+    const allServiceResources = [
       ...(tempResp.data || []),
       ...(motionResp.data || []),
       ...(lightLevelResp.data || []),
-      ...(buttonResp.data || [])
+      ...(buttonResp.data || []),
+      ...(powerResp.data || []),
+      ...(connectivityResp.data || [])
     ];
-    for (const svc of serviceResources) {
+    for (const svc of allServiceResources) {
+      const ownerRid = svc.owner?.rid;
+      if (ownerRid && deviceToRoomV2Id.get(ownerRid) === roomV2Id && !lightDeviceRids.has(ownerRid)) {
+        sensorDeviceRids.add(ownerRid);
+      }
+    }
+
+    // Method C — v1 group.sensors via service resource id_v1. Catches accessories not
+    // reflected in v2 room.children at all (older bridge firmware, un-synced assignments).
+    const v1SensorIds = new Set((groupsData[groupId]?.sensors || []).map(id => `/sensors/${id}`));
+    for (const svc of allServiceResources) {
       const ownerRid = svc.owner?.rid;
       if (ownerRid && svc.id_v1 && v1SensorIds.has(svc.id_v1) && !lightDeviceRids.has(ownerRid)) {
         sensorDeviceRids.add(ownerRid);
       }
     }
+
+    logger.debug('DEVICES_DISCOVERY', 'Accessory discovery result', {
+      groupId,
+      roomV2Id,
+      methodA_fromRoomChildren: [...roomDeviceRids].filter(r => !lightDeviceRids.has(r)).length,
+      methodB_deviceToRoomMapSize: deviceToRoomV2Id.size,
+      methodC_v1SensorIdsCount: v1SensorIds.size,
+      totalFound: sensorDeviceRids.size
+    });
 
     if (sensorDeviceRids.size === 0) return res.json({ success: true, devices: [] });
 
