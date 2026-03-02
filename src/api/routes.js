@@ -552,11 +552,14 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
     const sensorDeviceRids = [...roomDeviceRids].filter(rid => !lightDeviceRids.has(rid));
     if (sensorDeviceRids.length === 0) return res.json({ success: true, devices: [] });
 
-    const [tempResp, motionResp, lightLevelResp, deviceResp] = await Promise.all([
+    const [tempResp, motionResp, lightLevelResp, deviceResp, powerResp, connectivityResp, buttonResp] = await Promise.all([
       hueClient.v2GetTemperature(),
       hueClient.v2GetMotion(),
       hueClient.v2GetLightLevel(),
-      hueClient.v2GetDevices()
+      hueClient.v2GetDevices(),
+      hueClient.v2GetDevicePower(),
+      hueClient.v2GetZigbeeConnectivity(),
+      hueClient.v2GetButtons()
     ]);
 
     const sensorRidSet = new Set(sensorDeviceRids);
@@ -575,7 +578,7 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
     // Seed device map
     const deviceMap = {};
     for (const rid of sensorDeviceRids) {
-      deviceMap[rid] = { rid, ...(deviceById[rid] || {}), temperature: null, motion: null, lightLevel: null };
+      deviceMap[rid] = { rid, ...(deviceById[rid] || {}), temperature: null, motion: null, lightLevel: null, battery: null, connectivity: null, buttons: [] };
     }
 
     // Merge temperature readings
@@ -610,6 +613,43 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
           valid: l.light?.light_level_valid ?? false
         };
       }
+    }
+
+    // Merge battery / power state
+    for (const p of powerResp.data || []) {
+      const rid = p.owner?.rid;
+      if (deviceMap[rid]) {
+        deviceMap[rid].battery = {
+          level: p.power_state?.battery_level ?? null,
+          state: p.power_state?.battery_state ?? null
+        };
+      }
+    }
+
+    // Merge Zigbee connectivity
+    for (const z of connectivityResp.data || []) {
+      const rid = z.owner?.rid;
+      if (deviceMap[rid]) {
+        deviceMap[rid].connectivity = {
+          status: z.status ?? null
+        };
+      }
+    }
+
+    // Merge button resources — group by owner device, sort by control_id
+    const buttonsByDevice = {};
+    for (const b of buttonResp.data || []) {
+      const rid = b.owner?.rid;
+      if (!deviceMap[rid]) continue;
+      if (!buttonsByDevice[rid]) buttonsByDevice[rid] = [];
+      buttonsByDevice[rid].push({
+        controlId: b.metadata?.control_id ?? null,
+        lastEvent: b.button?.button_report?.event ?? null,
+        lastUpdated: b.button?.button_report?.updated ?? null
+      });
+    }
+    for (const [rid, btns] of Object.entries(buttonsByDevice)) {
+      deviceMap[rid].buttons = btns.sort((a, b) => (a.controlId ?? 99) - (b.controlId ?? 99));
     }
 
     res.json({ success: true, devices: Object.values(deviceMap) });

@@ -213,7 +213,49 @@ function isDimmable(type) {
 
 // ── Render ────────────────────────────────────────────────────────
 
+const DIMMER_BUTTON_LABELS = { 1: 'On', 2: 'Brighter', 3: 'Dimmer', 4: 'Off' };
+const DIMMER_EVENT_LABELS = {
+  initial_press: 'Pressed',
+  short_release: 'Short press',
+  long_release: 'Long press',
+  repeat: 'Held'
+};
+
+function renderBatteryBadge(battery) {
+  if (!battery || battery.level == null) return '';
+  const level = battery.level;
+  const stateClass = battery.state === 'critical' ? 'battery-critical'
+    : battery.state === 'low' ? 'battery-low'
+    : 'battery-ok';
+  return `<span class="battery-badge ${stateClass}">${level}%</span>`;
+}
+
+function renderConnectivityDot(connectivity) {
+  if (!connectivity) return '';
+  const connected = connectivity.status === 'connected';
+  return `<span class="connectivity-dot ${connected ? 'connectivity-connected' : 'connectivity-disconnected'}" title="${connected ? 'Connected' : 'Disconnected'}"></span>`;
+}
+
 function renderDeviceCard(device) {
+  const isDimmer = device.buttons && device.buttons.length > 0;
+  const name = escapeHtml(device.name || device.productName || (isDimmer ? 'Dimmer Switch' : 'Sensor'));
+
+  if (isDimmer) {
+    const badges = [
+      renderConnectivityDot(device.connectivity),
+      renderBatteryBadge(device.battery)
+    ].filter(Boolean).join('');
+    const btnCount = device.buttons.length;
+    return `<div class="device-card device-card--dimmer" data-rid="${escapeHtml(device.rid)}" role="button" tabindex="0" aria-label="${name} details">
+      <div class="device-card-header">
+        <div class="device-card-name" title="${name}">${name}</div>
+        <div class="device-card-badges">${badges}</div>
+      </div>
+      <div class="device-card-hint">${btnCount} button${btnCount !== 1 ? 's' : ''} &middot; Tap for details</div>
+    </div>`;
+  }
+
+  // Sensor device (motion/temp/lux)
   const rows = [];
 
   if (device.temperature?.valid && device.temperature.celsius != null) {
@@ -249,7 +291,6 @@ function renderDeviceCard(device) {
     rows.push(`<p class="no-items-msg">No sensor data</p>`);
   }
 
-  const name = escapeHtml(device.name || device.productName || 'Sensor');
   return `<div class="device-card" data-rid="${escapeHtml(device.rid)}">
     <div class="device-card-name" title="${name}">${name}</div>
     <div class="device-sensors">${rows.join('')}</div>
@@ -260,6 +301,86 @@ function renderDevices(devices) {
   const grid = document.getElementById('devices-grid');
   if (!grid) return;
   grid.innerHTML = (devices || []).map(renderDeviceCard).join('');
+}
+
+// ── Dimmer modal ──────────────────────────────────────────────────────────────
+
+function openDimmerModal(device) {
+  const modal = document.getElementById('dimmer-modal');
+  if (!modal) return;
+
+  const name = device.name || device.productName || 'Dimmer Switch';
+  document.getElementById('dimmer-modal-title').textContent = name;
+
+  // Meta row: connectivity + battery
+  const metaParts = [];
+  if (device.connectivity) {
+    const connected = device.connectivity.status === 'connected';
+    metaParts.push(`${renderConnectivityDot(device.connectivity)} <span class="dimmer-meta-label">${connected ? 'Connected' : 'Disconnected'}</span>`);
+  }
+  if (device.battery?.level != null) {
+    metaParts.push(`${renderBatteryBadge(device.battery)} <span class="dimmer-meta-label">Battery</span>`);
+  }
+  document.getElementById('dimmer-modal-meta').innerHTML = metaParts.join('<span class="dimmer-meta-sep">·</span>');
+
+  // Button rows
+  const rows = (device.buttons || []).map(btn => {
+    const label = DIMMER_BUTTON_LABELS[btn.controlId] || `Button ${btn.controlId}`;
+    const eventLabel = btn.lastEvent ? (DIMMER_EVENT_LABELS[btn.lastEvent] || btn.lastEvent) : null;
+    const timeLabel = btn.lastUpdated ? formatRelativeTime(btn.lastUpdated) : null;
+    const hasActivity = eventLabel || timeLabel;
+    return `<div class="dimmer-button-row">
+      <div class="dimmer-button-label">${escapeHtml(label)}</div>
+      <div class="dimmer-button-info">
+        ${hasActivity
+          ? `<span class="dimmer-button-event">${escapeHtml(eventLabel || '')}</span>
+             <span class="dimmer-button-time">${escapeHtml(timeLabel || '')}</span>`
+          : `<span class="dimmer-button-never">Never pressed</span>`}
+      </div>
+    </div>`;
+  });
+  document.getElementById('dimmer-buttons-list').innerHTML = rows.join('');
+
+  modal.classList.add('active');
+}
+
+function closeDimmerModal() {
+  const modal = document.getElementById('dimmer-modal');
+  if (modal) modal.classList.remove('active');
+}
+
+function initDimmerModal() {
+  const modal = document.getElementById('dimmer-modal');
+  if (!modal) return;
+
+  // Close button
+  document.getElementById('dimmer-modal-close')?.addEventListener('click', closeDimmerModal);
+  // Click outside
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeDimmerModal(); });
+  // Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) closeDimmerModal();
+  });
+
+  // Event delegation: clicks on dimmer cards in the devices grid
+  document.getElementById('devices-grid')?.addEventListener('click', (e) => {
+    const card = e.target.closest('.device-card--dimmer');
+    if (!card) return;
+    const rid = card.dataset.rid;
+    const device = (deviceData || []).find(d => d.rid === rid);
+    if (device) openDimmerModal(device);
+  });
+
+  // Keyboard activation for accessibility
+  document.getElementById('devices-grid')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const card = e.target.closest('.device-card--dimmer');
+    if (!card) return;
+    e.preventDefault();
+    const rid = card.dataset.rid;
+    const device = (deviceData || []).find(d => d.rid === rid);
+    if (device) openDimmerModal(device);
+  });
 }
 
 function renderLightCard(light) {
@@ -1255,6 +1376,7 @@ async function init() {
   initRoomBrightness();
   initSceneControls();
   initAnimBuilderModal();
+  initDimmerModal();
 
   await fetchAndRenderRoom();
   refreshIntervalId = setInterval(fetchAndRenderRoom, REFRESH_INTERVAL);
