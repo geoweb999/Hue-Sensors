@@ -13,6 +13,14 @@ class HueClient {
     return String(path).split(this.apiToken).join('[REDACTED]');
   }
 
+  _extractResponseMeta(res, data) {
+    const contentType = String(res?.headers?.['content-type'] || '').toLowerCase();
+    const trimmed = String(data || '').trim();
+    const isHtml = contentType.includes('text/html') || trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html');
+    const preview = trimmed.slice(0, 120);
+    return { contentType, isHtml, preview };
+  }
+
   _request(path, method = 'GET', body = null) {
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
@@ -44,6 +52,7 @@ class HueClient {
 
         res.on('end', () => {
           const durationMs = Date.now() - startedAt;
+          const responseMeta = this._extractResponseMeta(res, data);
           try {
             const parsed = JSON.parse(data);
             const responseFields = {
@@ -66,9 +75,15 @@ class HueClient {
               path: safePath,
               status: res.statusCode,
               durationMs,
+              contentType: responseMeta.contentType,
+              bodyPreview: responseMeta.preview,
               error
             });
-            reject(new Error(`Failed to parse Hue API response: ${error.message}`));
+            if (responseMeta.isHtml) {
+              reject(new Error('Hue bridge returned HTML instead of JSON. Check bridge IP, API token, and bridge availability.'));
+              return;
+            }
+            reject(new Error('Hue bridge returned a non-JSON response.'));
           }
         });
       });
@@ -119,6 +134,7 @@ class HueClient {
         res.on('data', (chunk) => { data += chunk; });
         res.on('end', () => {
           const durationMs = Date.now() - startedAt;
+          const responseMeta = this._extractResponseMeta(res, data);
           try {
             const parsed = JSON.parse(data);
             const responseFields = {
@@ -144,7 +160,8 @@ class HueClient {
               path: safePath,
               status: res.statusCode,
               durationMs,
-              bodyPreview: data.slice(0, 120)
+              contentType: responseMeta.contentType,
+              bodyPreview: responseMeta.preview
             });
             resolve({ data: [], errors: [] });
           }

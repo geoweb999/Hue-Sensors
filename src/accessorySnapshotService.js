@@ -1,6 +1,15 @@
 import { hueClient } from './hueClient.js';
 import { logger } from './logger.js';
 
+function normalizeSnapshotErrorMessage(error) {
+  const raw = String(error?.message || error || '').trim();
+  if (!raw) return 'Accessory snapshot refresh failed.';
+  if (raw.includes('Unexpected token') && raw.includes('<')) {
+    return 'Hue bridge returned HTML instead of JSON during accessory refresh.';
+  }
+  return raw;
+}
+
 function sortDevices(devices) {
   return (devices || []).sort((a, b) => {
     const nameA = String(a.name || a.productName || '').toLowerCase();
@@ -403,7 +412,7 @@ class AccessorySnapshotService {
         roomCount: nextSnapshots.size
       });
     } catch (error) {
-      this.lastError = error?.message || String(error);
+      this.lastError = normalizeSnapshotErrorMessage(error);
       for (const [groupId, snapshot] of this.snapshots.entries()) {
         this.snapshots.set(groupId, {
           ...snapshot,
