@@ -9,6 +9,7 @@ import apiRoutes from './src/api/routes.js';
 import { initializeDatabase } from './src/database.js';
 import { logger } from './src/logger.js';
 import { startHueEventStream } from './src/hueEventStream.js';
+import { accessorySnapshotService } from './src/accessorySnapshotService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -70,6 +71,12 @@ function startPolling() {
   // Then poll at the configured interval
   pollingInterval = setInterval(pollHueBridge, config.POLL_INTERVAL);
   logger.info('POLLING_STARTED', 'Polling service started', {
+    intervalSeconds: config.POLL_INTERVAL / 1000
+  });
+
+  // Keep accessory snapshots stable for room detail pages
+  accessorySnapshotService.start(config.POLL_INTERVAL);
+  logger.info('ACCESSORY_SNAPSHOT_STARTED', 'Accessory snapshot service started', {
     intervalSeconds: config.POLL_INTERVAL / 1000
   });
 }
@@ -155,6 +162,9 @@ function shutdown(signal = 'unknown') {
     stopHueEventStream();
     stopHueEventStream = null;
   }
+
+  // Stop accessory snapshot refresher
+  accessorySnapshotService.stop();
 
   // Close database connection
   if (database) {

@@ -247,9 +247,11 @@ function renderConnectivityDot(connectivity) {
 }
 
 function renderDeviceCard(device) {
+  const deviceKind = String(device.deviceKind || '').toLowerCase();
   const productName = String(device.productName || '').toLowerCase();
   const productArchetype = String(device.productArchetype || '').toLowerCase();
-  const isDimmer = (device.buttons && device.buttons.length > 0)
+  const isDimmer = deviceKind === 'dimmer'
+    || (device.buttons && device.buttons.length > 0)
     || productName.includes('dimmer')
     || productArchetype.includes('dimmer')
     || productArchetype.includes('switch');

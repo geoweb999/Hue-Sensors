@@ -282,6 +282,11 @@ class HueClient {
     return this._v2Request('/room');
   }
 
+  // Get all v2 zones (some v1 groups map to zones instead of rooms)
+  async v2GetZones() {
+    return this._v2Request('/zone');
+  }
+
   // Get all v2 lights (includes id_v1 linking to v1 light ID)
   async v2GetLights() {
     return this._v2Request('/light');
