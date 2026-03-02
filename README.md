@@ -15,7 +15,7 @@ This dashboard continuously polls your Philips Hue Bridge to collect environment
 - **Motion Detection**: Visual indicators showing current motion status and when motion was last detected
 - **Light Level Monitoring**: Displays ambient light levels in lux
 - **Lights Dashboard**: View and control all Hue lights — toggle power, adjust brightness, pick colors, and set color temperature
-- **Surprise Scenes**: One-click random scene generator with 10 curated swatch styles, randomized default brightness (80-100), editable color/brightness swatches, and per-scene animation presets
+- **Surprise Scenes**: One-click random scene generator with 10 curated swatch styles, randomized default brightness (80-100), editable color/brightness swatches, per-light assignment mode, reusable palette library, live preview toggle, and per-scene animation controls
 - **Interactive Graphs**: Auto-scaling temperature charts with motion events highlighted as green dots
 - **Smart Data Sampling**: Automatic sampling strategies (hourly/15-min/all) optimize performance for large datasets
 - **Time Range Controls**: Quick-select buttons for viewing 1-hour, 1-day, 7-day, 30-day, or auto-selected ranges
@@ -229,6 +229,7 @@ The dashboard automatically optimizes graph performance when you have accumulate
 | `/api/rooms/:groupId/surprise` | POST | Create a randomized cohesive scene for a room |
 | `/api/rooms/:groupId/surprise/remix` | POST | Modify an existing surprise style and save as a new scene |
 | `/api/rooms/:groupId/surprise/custom` | POST | Edit scene colors/brightness with custom swatches and save an updated scene |
+| `/api/rooms/:groupId/surprise/preview` | POST | Preview swatches live without creating a scene |
 | `/api/scenes/:sceneId` | PUT | Edit an existing scene (rename) |
 | `/api/lights` | GET | All lights grouped by room with state/color info |
 | `/api/lights/:id/state` | PUT | Control a light (on, bri, hue, sat, xy, ct, effect, alert, transitiontime) |

@@ -83,6 +83,15 @@
             <option value="0.75">Animate Fast</option>
             <option value="1">Animate Max</option>
           </select>
+          <select id="surprise-anim-direction" class="surprise-speed-select" aria-label="Choose surprise animation direction">
+            <option value="forward" selected>Direction: Forward</option>
+            <option value="reverse">Direction: Reverse</option>
+          </select>
+          <select id="surprise-anim-pattern" class="surprise-speed-select" aria-label="Choose surprise animation pattern">
+            <option value="rotate" selected>Pattern: Rotate</option>
+            <option value="bounce">Pattern: Bounce</option>
+            <option value="random">Pattern: Random</option>
+          </select>
           <button id="surprise-scene-btn" class="surprise-scene-btn">Create Surprise</button>
         </div>
         <div id="surprise-style-preview" class="surprise-style-preview"></div>
@@ -167,6 +176,68 @@
         <label>Swatches <span class="anim-palette-hint">(2–8)</span></label>
         <div id="surprise-swatches-list" class="anim-frames-list"></div>
         <button id="surprise-add-swatch-btn" class="anim-add-frame-btn">+ Add Swatch</button>
+      </div>
+
+      <div class="anim-modal-field">
+        <label for="surprise-template-select">Template</label>
+        <div class="surprise-inline-controls">
+          <select id="surprise-template-select" class="surprise-style-select" aria-label="Choose swatch template"></select>
+          <button id="surprise-template-apply-btn" class="anim-add-frame-btn">Apply Template</button>
+        </div>
+      </div>
+
+      <div class="anim-modal-field">
+        <label>Brightness Constraints</label>
+        <div class="surprise-inline-controls">
+          <label class="surprise-mini-field">Min
+            <input id="surprise-min-brightness" type="range" min="1" max="100" value="35">
+            <span id="surprise-min-brightness-label">35%</span>
+          </label>
+          <label class="surprise-mini-field">Max
+            <input id="surprise-max-brightness" type="range" min="1" max="100" value="100">
+            <span id="surprise-max-brightness-label">100%</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="anim-modal-field">
+        <label for="surprise-assignment-mode">Assignment Mode</label>
+        <select id="surprise-assignment-mode" class="surprise-style-select" aria-label="Choose assignment mode">
+          <option value="random" selected>Random lights</option>
+          <option value="per-light">Per-light assignment</option>
+        </select>
+        <div id="surprise-light-assignments" class="surprise-light-assignments hidden"></div>
+      </div>
+
+      <div class="anim-modal-field">
+        <label for="surprise-transition-ms">Transition</label>
+        <select id="surprise-transition-ms" class="surprise-style-select" aria-label="Choose transition duration">
+          <option value="0" selected>Instant</option>
+          <option value="400">0.4s</option>
+          <option value="1000">1.0s</option>
+          <option value="2000">2.0s</option>
+          <option value="4000">4.0s</option>
+        </select>
+      </div>
+
+      <div class="anim-modal-field">
+        <label class="surprise-inline-check">
+          <input id="surprise-live-preview-toggle" type="checkbox">
+          Live preview while editing
+        </label>
+      </div>
+
+      <div class="anim-modal-field">
+        <label>Saved Palettes</label>
+        <div class="surprise-inline-controls">
+          <select id="surprise-saved-palette-select" class="surprise-style-select" aria-label="Choose saved palette"></select>
+          <button id="surprise-load-palette-btn" class="anim-add-frame-btn">Load</button>
+          <button id="surprise-delete-palette-btn" class="anim-add-frame-btn">Delete</button>
+        </div>
+        <div class="surprise-inline-controls">
+          <input type="text" id="surprise-palette-name" class="anim-scene-name-input" maxlength="32" placeholder="Palette name">
+          <button id="surprise-save-palette-btn" class="anim-add-frame-btn">Save Palette</button>
+        </div>
       </div>
 
       <div class="modal-buttons">

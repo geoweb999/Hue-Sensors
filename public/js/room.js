@@ -11,6 +11,9 @@ let roomColorWheel = null;
 let surpriseStyles = [];
 let editingSurpriseScene = null;
 const SURPRISE_DEFAULT_ANIMATION_SPEED = 0.5;
+let surprisePreviewTimeout = null;
+
+const SURPRISE_PALETTE_LIBRARY_KEY = 'hueSurprisePaletteLibrary';
 
 // Room brightness slider state
 let roomBriSliderActive = false;
@@ -455,6 +458,7 @@ function renderSceneCard(scene, surpriseMeta = null) {
   const isSurpriseByMeta = !!(surpriseMeta && surpriseMeta[scene.id]);
   const isSurprise = isSurpriseByName || isSurpriseByMeta;
   const isSurpriseAnimating = !!(surpriseMeta && surpriseMeta[scene.id]?.isAnimating);
+  const isSurprisePaused = !!(surpriseMeta && surpriseMeta[scene.id]?.isPaused);
   const animateLabel = isSurpriseAnimating ? 'Looping' : 'Animate';
   return `
     <div class="scene-card${isAnimated ? ' scene-animated' : ''}" data-scene-id="${scene.id}">
@@ -463,6 +467,8 @@ function renderSceneCard(scene, surpriseMeta = null) {
         <button class="scene-edit-btn" data-scene-id="${scene.id}" title="Edit colors and brightness">Edit</button>
         <button class="scene-rename-btn" data-scene-id="${scene.id}" title="Rename scene">Rename</button>
         ${isSurprise ? `<button class="scene-animate-btn" data-scene-id="${scene.id}" title="Animate surprise palette">${animateLabel}</button>` : ''}
+        ${isSurprise ? `<button class="scene-pause-btn" data-scene-id="${scene.id}" title="Pause surprise animation" ${isSurpriseAnimating ? '' : 'disabled'}>Pause</button>` : ''}
+        ${isSurprise ? `<button class="scene-resume-btn" data-scene-id="${scene.id}" title="Resume surprise animation" ${isSurprisePaused ? '' : 'disabled'}>Resume</button>` : ''}
         ${isSurprise ? `<button class="scene-stop-btn" data-scene-id="${scene.id}" title="Stop surprise animation">Stop</button>` : ''}
         ${isSurprise ? `<button class="scene-remix-btn" data-scene-id="${scene.id}" title="Create a modified surprise">Remix</button>` : ''}
         <button class="scene-activate-btn" data-scene-id="${scene.id}">Activate</button>
@@ -982,6 +988,19 @@ function saveSurpriseSceneMeta(rid, meta) {
   localStorage.setItem(`hueSurpriseScenes_${rid}`, JSON.stringify(meta));
 }
 
+function loadSurprisePaletteLibrary() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SURPRISE_PALETTE_LIBRARY_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSurprisePaletteLibrary(items) {
+  localStorage.setItem(SURPRISE_PALETTE_LIBRARY_KEY, JSON.stringify(items));
+}
+
 function upsertSurpriseSceneMeta(sceneId, sceneName, styleId, palette) {
   if (!roomId || !sceneId || !Array.isArray(palette) || palette.length === 0) return;
   const meta = loadSurpriseSceneMeta(roomId);
@@ -992,18 +1011,24 @@ function upsertSurpriseSceneMeta(sceneId, sceneName, styleId, palette) {
     palette,
     animationSceneId: previous.animationSceneId || null,
     isAnimating: previous.isAnimating || false,
+    isPaused: previous.isPaused || false,
+    animationOptions: previous.animationOptions || null,
+    assignmentMode: previous.assignmentMode || 'random',
+    lightAssignments: previous.lightAssignments || {},
+    transitionMs: Number.isFinite(previous.transitionMs) ? previous.transitionMs : 0,
     updatedAt: Date.now()
   };
   saveSurpriseSceneMeta(roomId, meta);
 }
 
-function setSurpriseAnimatingByAnimationScene(animationSceneId, isAnimating) {
+function setSurpriseAnimatingByAnimationScene(animationSceneId, isAnimating, isPaused = !isAnimating) {
   if (!roomId || !animationSceneId) return;
   const meta = loadSurpriseSceneMeta(roomId);
   let changed = false;
   for (const sceneMeta of Object.values(meta)) {
     if (sceneMeta && sceneMeta.animationSceneId === animationSceneId) {
       sceneMeta.isAnimating = !!isAnimating;
+      sceneMeta.isPaused = !!isPaused;
       sceneMeta.updatedAt = Date.now();
       changed = true;
     }
@@ -1063,6 +1088,44 @@ function getSelectedSurpriseAnimationSpeed() {
   const speedSelect = document.getElementById('surprise-speed-select');
   const speed = parseFloat(speedSelect?.value || String(SURPRISE_DEFAULT_ANIMATION_SPEED));
   return clampNumber(Number.isFinite(speed) ? speed : SURPRISE_DEFAULT_ANIMATION_SPEED, 0.1, 1);
+}
+
+function getSelectedSurpriseAnimationDirection() {
+  const select = document.getElementById('surprise-anim-direction');
+  return select?.value === 'reverse' ? 'reverse' : 'forward';
+}
+
+function getSelectedSurpriseAnimationPattern() {
+  const select = document.getElementById('surprise-anim-pattern');
+  const pattern = String(select?.value || 'rotate');
+  if (pattern === 'bounce' || pattern === 'random') return pattern;
+  return 'rotate';
+}
+
+function shuffleArray(input) {
+  const arr = input.slice();
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function applyAnimationPattern(palette, direction, pattern) {
+  let output = Array.isArray(palette) ? palette.slice() : [];
+  if (direction === 'reverse') {
+    output.reverse();
+  }
+  if (pattern === 'bounce') {
+    const tail = output.length > 2 ? output.slice(1, -1).reverse() : output.slice().reverse();
+    output = output.concat(tail);
+  } else if (pattern === 'random') {
+    output = shuffleArray(output);
+  } else if (pattern === 'rotate') {
+    const offset = output.length > 1 ? Math.floor(Math.random() * (output.length - 1)) + 1 : 0;
+    output = rotatePalette(output, offset);
+  }
+  return output;
 }
 
 function rotatePalette(palette, offset = 0) {
@@ -1137,6 +1200,157 @@ function updateSurpriseSwatchRemovability() {
   });
 }
 
+function getSurprisePaletteFromModal() {
+  const rows = document.querySelectorAll('#surprise-swatches-list .anim-frame-row');
+  return Array.from(rows).map((row) => ({
+    hex: row.querySelector('.anim-frame-color').value,
+    brightness: clampNumber(parseInt(row.querySelector('.anim-frame-bri').value, 10) || 75, 1, 100)
+  }));
+}
+
+function setSurprisePaletteInModal(palette) {
+  const list = document.getElementById('surprise-swatches-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const normalized = (Array.isArray(palette) ? palette : []).slice(0, 8);
+  normalized.forEach((swatch) => {
+    list.appendChild(makeSurpriseSwatchRow(swatch.hex || '#ffffff', swatch.brightness || 75));
+  });
+  if (normalized.length < 2) {
+    ['#c8d8ff', '#f6b8d0'].forEach((hex) => list.appendChild(makeSurpriseSwatchRow(hex, 75)));
+  }
+  updateSurpriseSwatchRemovability();
+  refreshSurpriseLightAssignmentRows();
+}
+
+function refreshSavedPaletteSelect() {
+  const select = document.getElementById('surprise-saved-palette-select');
+  if (!select) return;
+  const library = loadSurprisePaletteLibrary();
+  if (library.length === 0) {
+    select.innerHTML = '<option value="">No saved palettes</option>';
+    return;
+  }
+  select.innerHTML = library.map((item, index) =>
+    `<option value="${index}">${escapeHtml(item.name || `Palette ${index + 1}`)}</option>`
+  ).join('');
+}
+
+function refreshSurpriseTemplateSelect() {
+  const select = document.getElementById('surprise-template-select');
+  if (!select) return;
+  const options = surpriseStyles.map((style) =>
+    `<option value="${escapeHtml(style.id)}">${escapeHtml(style.name)}</option>`
+  );
+  options.unshift('<option value="">Choose template…</option>');
+  select.innerHTML = options.join('');
+}
+
+function applyBrightnessConstraintsToModalSwatches() {
+  const minInput = document.getElementById('surprise-min-brightness');
+  const maxInput = document.getElementById('surprise-max-brightness');
+  const minLabel = document.getElementById('surprise-min-brightness-label');
+  const maxLabel = document.getElementById('surprise-max-brightness-label');
+  if (!minInput || !maxInput) return;
+
+  let minValue = clampNumber(parseInt(minInput.value, 10) || 1, 1, 100);
+  let maxValue = clampNumber(parseInt(maxInput.value, 10) || 100, 1, 100);
+  if (minValue > maxValue) {
+    [minValue, maxValue] = [maxValue, minValue];
+  }
+  minInput.value = String(minValue);
+  maxInput.value = String(maxValue);
+  if (minLabel) minLabel.textContent = `${minValue}%`;
+  if (maxLabel) maxLabel.textContent = `${maxValue}%`;
+
+  const rows = document.querySelectorAll('#surprise-swatches-list .anim-frame-row');
+  rows.forEach((row) => {
+    const slider = row.querySelector('.anim-frame-bri');
+    const label = row.querySelector('.anim-frame-bri-val');
+    const constrained = clampNumber(parseInt(slider.value, 10) || 75, minValue, maxValue);
+    slider.value = String(constrained);
+    if (label) label.textContent = `${constrained}%`;
+  });
+}
+
+function getSurpriseLightAssignmentsFromModal() {
+  const mode = document.getElementById('surprise-assignment-mode')?.value || 'random';
+  if (mode !== 'per-light') {
+    return { assignmentMode: 'random', lightAssignments: {} };
+  }
+  const assignments = {};
+  const rows = document.querySelectorAll('#surprise-light-assignments .surprise-light-assign-row');
+  rows.forEach((row) => {
+    const lightId = row.dataset.lightId;
+    const select = row.querySelector('select');
+    const swatchIndex = parseInt(select?.value, 10);
+    if (lightId && Number.isFinite(swatchIndex) && swatchIndex >= 0) {
+      assignments[lightId] = swatchIndex;
+    }
+  });
+  return { assignmentMode: 'per-light', lightAssignments: assignments };
+}
+
+function refreshSurpriseLightAssignmentRows(savedAssignments = null) {
+  const mode = document.getElementById('surprise-assignment-mode')?.value || 'random';
+  const container = document.getElementById('surprise-light-assignments');
+  if (!container) return;
+  if (mode !== 'per-light') {
+    container.classList.add('hidden');
+    container.innerHTML = '';
+    return;
+  }
+
+  container.classList.remove('hidden');
+  const palette = getSurprisePaletteFromModal();
+  const assignmentSource = savedAssignments && typeof savedAssignments === 'object'
+    ? savedAssignments
+    : (loadSurpriseSceneMeta(roomId)[editingSurpriseScene?.id || '']?.lightAssignments || {});
+  const lights = roomData?.lights || [];
+  container.innerHTML = lights.map((light) => {
+    const savedIndex = Number.parseInt(assignmentSource?.[light.id], 10);
+    const selectedIndex = Number.isFinite(savedIndex) && savedIndex >= 0 && savedIndex < palette.length ? savedIndex : 0;
+    const options = palette.map((swatch, index) => {
+      const selected = index === selectedIndex ? 'selected' : '';
+      return `<option value="${index}" ${selected}>${index + 1}: ${escapeHtml(swatch.hex)} (${swatch.brightness}%)</option>`;
+    }).join('');
+    return `
+      <div class="surprise-light-assign-row" data-light-id="${light.id}">
+        <span class="surprise-light-name" title="${escapeHtml(light.name)}">${escapeHtml(light.name)}</span>
+        <select class="surprise-style-select">${options}</select>
+      </div>
+    `;
+  }).join('');
+}
+
+function queueSurpriseLivePreview() {
+  const livePreviewEnabled = !!document.getElementById('surprise-live-preview-toggle')?.checked;
+  if (!livePreviewEnabled || !editingSurpriseScene) return;
+  if (surprisePreviewTimeout) clearTimeout(surprisePreviewTimeout);
+  surprisePreviewTimeout = setTimeout(async () => {
+    try {
+      const palette = getSurprisePaletteFromModal();
+      if (palette.length < 2) return;
+      const styleId = document.getElementById('surprise-style-select')?.value || null;
+      const transitionMs = parseInt(document.getElementById('surprise-transition-ms')?.value || '0', 10) || 0;
+      const assignmentData = getSurpriseLightAssignmentsFromModal();
+      await fetch(`/api/rooms/${roomId}/surprise/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          styleId,
+          palette,
+          assignmentMode: assignmentData.assignmentMode,
+          lightAssignments: assignmentData.lightAssignments,
+          transitionMs
+        })
+      });
+    } catch (error) {
+      console.warn('Surprise live preview error:', error.message);
+    }
+  }, 280);
+}
+
 function openSurpriseEditor(sceneId) {
   const scene = (roomData?.scenes || []).find((entry) => entry.id === sceneId);
   if (!scene) return;
@@ -1150,11 +1364,36 @@ function openSurpriseEditor(sceneId) {
 
   title.textContent = 'Edit Surprise';
   nameInput.value = scene.name || '';
-  list.innerHTML = '';
+  const meta = loadSurpriseSceneMeta(roomId);
+  const sceneMeta = meta[scene.id] || {};
 
   const palette = getDefaultSurprisePalette(scene);
-  palette.forEach((swatch) => list.appendChild(makeSurpriseSwatchRow(swatch.hex, swatch.brightness)));
-  updateSurpriseSwatchRemovability();
+  setSurprisePaletteInModal(palette);
+  refreshSurpriseTemplateSelect();
+  refreshSavedPaletteSelect();
+
+  const assignmentModeSelect = document.getElementById('surprise-assignment-mode');
+  const transitionSelect = document.getElementById('surprise-transition-ms');
+  const livePreviewToggle = document.getElementById('surprise-live-preview-toggle');
+  const minBrightness = document.getElementById('surprise-min-brightness');
+  const maxBrightness = document.getElementById('surprise-max-brightness');
+
+  if (assignmentModeSelect) {
+    assignmentModeSelect.value = sceneMeta.assignmentMode === 'per-light' ? 'per-light' : 'random';
+  }
+  if (transitionSelect) {
+    const transitionMs = Number.isFinite(sceneMeta.transitionMs) ? sceneMeta.transitionMs : 0;
+    transitionSelect.value = ['0', '400', '1000', '2000', '4000'].includes(String(transitionMs))
+      ? String(transitionMs)
+      : '0';
+  }
+  if (livePreviewToggle) {
+    livePreviewToggle.checked = false;
+  }
+  if (minBrightness) minBrightness.value = '35';
+  if (maxBrightness) maxBrightness.value = '100';
+  applyBrightnessConstraintsToModalSwatches();
+  refreshSurpriseLightAssignmentRows(sceneMeta.lightAssignments || {});
 
   modal.classList.add('active');
   nameInput.focus();
@@ -1162,8 +1401,21 @@ function openSurpriseEditor(sceneId) {
 
 function closeSurpriseEditor() {
   const modal = document.getElementById('surprise-editor-modal');
+  const wasPreviewing = !!document.getElementById('surprise-live-preview-toggle')?.checked;
+  const sceneToRestore = editingSurpriseScene?.id || null;
   modal.classList.remove('active');
   editingSurpriseScene = null;
+  if (surprisePreviewTimeout) {
+    clearTimeout(surprisePreviewTimeout);
+    surprisePreviewTimeout = null;
+  }
+  if (wasPreviewing && sceneToRestore && roomId) {
+    fetch(`/api/rooms/${roomId}/scene`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sceneId: sceneToRestore })
+    }).catch(() => {});
+  }
 }
 
 function initSurpriseEditorModal() {
@@ -1173,6 +1425,18 @@ function initSurpriseEditorModal() {
   const addBtn = document.getElementById('surprise-add-swatch-btn');
   const saveBtn = document.getElementById('surprise-save-btn');
   const styleSelect = document.getElementById('surprise-style-select');
+  const templateSelect = document.getElementById('surprise-template-select');
+  const templateApplyBtn = document.getElementById('surprise-template-apply-btn');
+  const assignmentModeSelect = document.getElementById('surprise-assignment-mode');
+  const transitionSelect = document.getElementById('surprise-transition-ms');
+  const livePreviewToggle = document.getElementById('surprise-live-preview-toggle');
+  const minBrightness = document.getElementById('surprise-min-brightness');
+  const maxBrightness = document.getElementById('surprise-max-brightness');
+  const savePaletteBtn = document.getElementById('surprise-save-palette-btn');
+  const loadPaletteBtn = document.getElementById('surprise-load-palette-btn');
+  const deletePaletteBtn = document.getElementById('surprise-delete-palette-btn');
+  const savedPaletteSelect = document.getElementById('surprise-saved-palette-select');
+  const paletteNameInput = document.getElementById('surprise-palette-name');
 
   closeBtn.addEventListener('click', closeSurpriseEditor);
   cancelBtn.addEventListener('click', closeSurpriseEditor);
@@ -1189,17 +1453,116 @@ function initSurpriseEditorModal() {
     if (list.querySelectorAll('.anim-frame-row').length >= 8) return;
     list.appendChild(makeSurpriseSwatchRow('#ffffff', 75));
     updateSurpriseSwatchRemovability();
+    applyBrightnessConstraintsToModalSwatches();
+    refreshSurpriseLightAssignmentRows();
+    queueSurpriseLivePreview();
+  });
+
+  document.getElementById('surprise-swatches-list').addEventListener('input', () => {
+    applyBrightnessConstraintsToModalSwatches();
+    refreshSurpriseLightAssignmentRows();
+    queueSurpriseLivePreview();
+  });
+
+  if (assignmentModeSelect) {
+    assignmentModeSelect.addEventListener('change', () => {
+      refreshSurpriseLightAssignmentRows();
+      queueSurpriseLivePreview();
+    });
+  }
+
+  if (transitionSelect) {
+    transitionSelect.addEventListener('change', () => queueSurpriseLivePreview());
+  }
+
+  if (livePreviewToggle) {
+    livePreviewToggle.addEventListener('change', () => {
+      if (livePreviewToggle.checked) queueSurpriseLivePreview();
+    });
+  }
+
+  if (minBrightness) {
+    minBrightness.addEventListener('input', () => {
+      applyBrightnessConstraintsToModalSwatches();
+      queueSurpriseLivePreview();
+    });
+  }
+  if (maxBrightness) {
+    maxBrightness.addEventListener('input', () => {
+      applyBrightnessConstraintsToModalSwatches();
+      queueSurpriseLivePreview();
+    });
+  }
+
+  if (templateApplyBtn) {
+    templateApplyBtn.addEventListener('click', () => {
+      const styleId = templateSelect?.value || '';
+      if (!styleId) return;
+      const style = surpriseStyles.find((entry) => entry.id === styleId);
+      const palette = (style?.samplePalette || ['#c8d8ff', '#f6b8d0', '#c4f0dd'])
+        .slice(0, 6)
+        .map((hex) => ({ hex, brightness: 75 }));
+      setSurprisePaletteInModal(palette);
+      applyBrightnessConstraintsToModalSwatches();
+      queueSurpriseLivePreview();
+    });
+  }
+
+  if (savePaletteBtn) {
+    savePaletteBtn.addEventListener('click', () => {
+      const name = String(paletteNameInput?.value || '').trim();
+      if (!name) {
+        alert('Enter a palette name to save.');
+        return;
+      }
+      const palette = getSurprisePaletteFromModal();
+      const library = loadSurprisePaletteLibrary();
+      const existingIndex = library.findIndex((entry) => String(entry.name || '').toLowerCase() === name.toLowerCase());
+      const next = { name, palette, updatedAt: Date.now() };
+      if (existingIndex >= 0) {
+        library[existingIndex] = next;
+      } else {
+        library.push(next);
+      }
+      saveSurprisePaletteLibrary(library);
+      refreshSavedPaletteSelect();
+      if (savedPaletteSelect) savedPaletteSelect.value = String(existingIndex >= 0 ? existingIndex : library.length - 1);
+    });
+  }
+
+  if (loadPaletteBtn) {
+    loadPaletteBtn.addEventListener('click', () => {
+      const library = loadSurprisePaletteLibrary();
+      const index = parseInt(savedPaletteSelect?.value || '-1', 10);
+      if (!Number.isFinite(index) || index < 0 || index >= library.length) return;
+      setSurprisePaletteInModal(library[index].palette || []);
+      applyBrightnessConstraintsToModalSwatches();
+      queueSurpriseLivePreview();
+    });
+  }
+
+  if (deletePaletteBtn) {
+    deletePaletteBtn.addEventListener('click', () => {
+      const library = loadSurprisePaletteLibrary();
+      const index = parseInt(savedPaletteSelect?.value || '-1', 10);
+      if (!Number.isFinite(index) || index < 0 || index >= library.length) return;
+      library.splice(index, 1);
+      saveSurprisePaletteLibrary(library);
+      refreshSavedPaletteSelect();
+    });
+  }
+
+  document.getElementById('surprise-light-assignments').addEventListener('change', () => {
+    queueSurpriseLivePreview();
   });
 
   saveBtn.addEventListener('click', async () => {
     if (!editingSurpriseScene) return;
 
     const name = document.getElementById('surprise-editor-name').value.trim() || editingSurpriseScene.name;
-    const rows = document.querySelectorAll('#surprise-swatches-list .anim-frame-row');
-    const palette = Array.from(rows).map((row) => ({
-      hex: row.querySelector('.anim-frame-color').value,
-      brightness: clampNumber(parseInt(row.querySelector('.anim-frame-bri').value, 10) || 75, 1, 100)
-    }));
+    const palette = getSurprisePaletteFromModal();
+    const assignmentData = getSurpriseLightAssignmentsFromModal();
+    const transitionMs = parseInt(transitionSelect?.value || '0', 10) || 0;
 
     if (palette.length < 2) {
       alert('Please choose at least 2 swatches.');
@@ -1219,7 +1582,10 @@ function initSurpriseEditorModal() {
           styleId,
           name,
           palette,
-          replaceExisting: true
+          replaceExisting: true,
+          assignmentMode: assignmentData.assignmentMode,
+          lightAssignments: assignmentData.lightAssignments,
+          transitionMs
         })
       });
       const data = await res.json();
@@ -1228,9 +1594,13 @@ function initSurpriseEditorModal() {
       const meta = loadSurpriseSceneMeta(roomId);
       let preservedAnimationSceneId = null;
       let preservedIsAnimating = false;
+      let preservedIsPaused = false;
+      let preservedAnimationOptions = null;
       if (data.replacedSceneId && meta[data.replacedSceneId]) {
         preservedAnimationSceneId = meta[data.replacedSceneId].animationSceneId || null;
         preservedIsAnimating = !!meta[data.replacedSceneId].isAnimating;
+        preservedIsPaused = !!meta[data.replacedSceneId].isPaused;
+        preservedAnimationOptions = meta[data.replacedSceneId].animationOptions || null;
         delete meta[data.replacedSceneId];
       }
       meta[data.sceneId] = {
@@ -1239,6 +1609,11 @@ function initSurpriseEditorModal() {
         palette: data.palette,
         animationSceneId: preservedAnimationSceneId,
         isAnimating: preservedIsAnimating,
+        isPaused: preservedIsPaused,
+        animationOptions: preservedAnimationOptions,
+        assignmentMode: assignmentData.assignmentMode,
+        lightAssignments: assignmentData.lightAssignments,
+        transitionMs,
         updatedAt: Date.now()
       };
       saveSurpriseSceneMeta(roomId, meta);
@@ -1260,6 +1635,8 @@ function initSceneControls() {
   const saveInput = document.getElementById('save-scene-input');
   const surpriseSelect = document.getElementById('surprise-style-select');
   const surpriseSpeedSelect = document.getElementById('surprise-speed-select');
+  const surpriseDirectionSelect = document.getElementById('surprise-anim-direction');
+  const surprisePatternSelect = document.getElementById('surprise-anim-pattern');
   const surpriseBtn = document.getElementById('surprise-scene-btn');
 
   // Activate scene
@@ -1356,10 +1733,9 @@ function initSceneControls() {
       return;
     }
 
-    const rotateBy = basePalette.length > 1
-      ? Math.floor(Math.random() * (basePalette.length - 1)) + 1
-      : 0;
-    const rotatedPalette = rotatePalette(basePalette, rotateBy);
+    const direction = getSelectedSurpriseAnimationDirection();
+    const pattern = getSelectedSurpriseAnimationPattern();
+    const animatedPalette = applyAnimationPattern(basePalette, direction, pattern);
     const speed = getSelectedSurpriseAnimationSpeed();
     const animationName = `${surpriseScene.name} Animation`.slice(0, 32);
 
@@ -1389,7 +1765,7 @@ function initSceneControls() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             name: animationName,
-            palette: rotatedPalette,
+            palette: animatedPalette,
             speed
           })
         });
@@ -1406,12 +1782,18 @@ function initSceneControls() {
         palette: storedMeta?.palette || basePalette,
         animationSceneId,
         isAnimating: true,
+        isPaused: false,
+        animationOptions: {
+          speed,
+          direction,
+          pattern
+        },
         updatedAt: Date.now()
       };
       meta[surpriseScene.id] = nextMeta;
       saveSurpriseSceneMeta(roomId, meta);
 
-      upsertDynamicSceneStorage(animationSceneId, animationName, rotatedPalette, speed);
+      upsertDynamicSceneStorage(animationSceneId, animationName, animatedPalette, speed);
       activeDynamicSceneId = animationSceneId;
       setSurpriseAnimatingByAnimationScene(animationSceneId, true);
       renderDynamicScenesList();
@@ -1426,6 +1808,87 @@ function initSceneControls() {
         btn.disabled = false;
       }, 2000);
       alert(`Could not animate surprise scene: ${err.message}`);
+    }
+  });
+
+  // Pause surprise animation
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-pause-btn');
+    if (!btn) return;
+    const scene = (roomData?.scenes || []).find((entry) => entry.id === btn.dataset.sceneId);
+    if (!scene) return;
+    const meta = loadSurpriseSceneMeta(roomId);
+    const sceneMeta = meta[scene.id] || {};
+    const animationSceneId = sceneMeta.animationSceneId || null;
+    if (!animationSceneId) {
+      alert('No animation scene is linked to this surprise yet.');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Pausing...';
+    try {
+      const res = await fetch(`/api/v2/scenes/${animationSceneId}/recall`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'active' })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || data.errors?.[0]?.description || 'Failed to pause');
+      sceneMeta.isAnimating = false;
+      sceneMeta.isPaused = true;
+      sceneMeta.updatedAt = Date.now();
+      meta[scene.id] = sceneMeta;
+      saveSurpriseSceneMeta(roomId, meta);
+      if (activeDynamicSceneId === animationSceneId) activeDynamicSceneId = null;
+      renderDynamicScenesList();
+      renderScenes(roomData?.scenes || []);
+    } catch (error) {
+      alert(`Could not pause surprise animation: ${error.message}`);
+    } finally {
+      btn.textContent = 'Pause';
+      btn.disabled = false;
+    }
+  });
+
+  // Resume surprise animation
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-resume-btn');
+    if (!btn) return;
+    const scene = (roomData?.scenes || []).find((entry) => entry.id === btn.dataset.sceneId);
+    if (!scene) return;
+    const meta = loadSurpriseSceneMeta(roomId);
+    const sceneMeta = meta[scene.id] || {};
+    const animationSceneId = sceneMeta.animationSceneId || null;
+    if (!animationSceneId) {
+      alert('No paused animation scene is linked to this surprise.');
+      return;
+    }
+    const speed = clampNumber(parseFloat(sceneMeta.animationOptions?.speed) || getSelectedSurpriseAnimationSpeed(), 0.1, 1);
+
+    btn.disabled = true;
+    btn.textContent = 'Resuming...';
+    try {
+      const res = await fetch(`/api/v2/scenes/${animationSceneId}/recall`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'dynamic_palette', speed })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || data.errors?.[0]?.description || 'Failed to resume');
+      sceneMeta.isAnimating = true;
+      sceneMeta.isPaused = false;
+      sceneMeta.updatedAt = Date.now();
+      meta[scene.id] = sceneMeta;
+      saveSurpriseSceneMeta(roomId, meta);
+      activeDynamicSceneId = animationSceneId;
+      renderDynamicScenesList();
+      renderScenes(roomData?.scenes || []);
+    } catch (error) {
+      alert(`Could not resume surprise animation: ${error.message}`);
+    } finally {
+      btn.textContent = 'Resume';
+      btn.disabled = false;
     }
   });
 
@@ -1460,7 +1923,13 @@ function initSceneControls() {
       if (activeDynamicSceneId === animationSceneId) {
         activeDynamicSceneId = null;
       }
-      setSurpriseAnimatingByAnimationScene(animationSceneId, false);
+      setSurpriseAnimatingByAnimationScene(animationSceneId, false, false);
+      const sceneMeta = meta[surpriseScene.id] || {};
+      sceneMeta.isAnimating = false;
+      sceneMeta.isPaused = false;
+      sceneMeta.updatedAt = Date.now();
+      meta[surpriseScene.id] = sceneMeta;
+      saveSurpriseSceneMeta(roomId, meta);
       renderDynamicScenesList();
       renderScenes(roomData?.scenes || []);
 
@@ -1577,6 +2046,12 @@ function initSceneControls() {
 
   if (surpriseSpeedSelect && !surpriseSpeedSelect.value) {
     surpriseSpeedSelect.value = String(SURPRISE_DEFAULT_ANIMATION_SPEED);
+  }
+  if (surpriseDirectionSelect && !surpriseDirectionSelect.value) {
+    surpriseDirectionSelect.value = 'forward';
+  }
+  if (surprisePatternSelect && !surprisePatternSelect.value) {
+    surprisePatternSelect.value = 'rotate';
   }
 
   if (surpriseBtn) {
@@ -1793,7 +2268,7 @@ async function initAnimationSection() {
           activeDynamicSceneId = null;
           renderDynamicScenesList();
         }
-        setSurpriseAnimatingByAnimationScene(sceneId, false);
+        setSurpriseAnimatingByAnimationScene(sceneId, false, false);
         renderScenes(roomData?.scenes || []);
       } catch (err) {
         console.error('Stop error:', err.message);

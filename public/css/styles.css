@@ -1690,6 +1690,25 @@ body[data-theme="dark"] {
   border-color: #e9aaaa;
 }
 
+.scene-pause-btn,
+.scene-resume-btn {
+  background: #f2f7ff;
+  color: #405f91;
+  border: 1px solid #c9d8f1;
+  border-radius: 6px;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scene-pause-btn:hover,
+.scene-resume-btn:hover {
+  background: #e2ecff;
+  border-color: #abc2eb;
+}
+
 .scene-activate-btn {
   flex: 1;
   background: #667eea;
@@ -1790,6 +1809,7 @@ body[data-theme="dark"] {
 .surprise-scene-controls {
   margin-top: 0.65rem;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
 }
 
@@ -1869,6 +1889,61 @@ body[data-theme="dark"] {
 .surprise-style-desc {
   font-size: 0.82rem;
   color: #666;
+}
+
+.surprise-inline-controls {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.surprise-mini-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 140px;
+  font-size: 0.78rem;
+  color: #666;
+}
+
+.surprise-mini-field span {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #555;
+}
+
+.surprise-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.86rem;
+  color: #555;
+}
+
+.surprise-light-assignments {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 180px;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.surprise-light-assign-row {
+  display: grid;
+  grid-template-columns: 1fr 170px;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.surprise-light-name {
+  font-size: 0.8rem;
+  color: #555;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Automations list */
@@ -2061,8 +2136,9 @@ body[data-theme="dark"] {
 
 /* ── Dimmer detail modal ─────────────────────────────────────────── */
 .dimmer-modal-content {
-  max-width: 380px;
+  max-width: 400px;
   width: 90%;
+  padding: 1.75rem 2rem 2rem;
 }
 .dimmer-modal-meta {
   display: flex;
@@ -2282,6 +2358,19 @@ body[data-theme="dark"] {
   border-color: #c56c6c;
 }
 
+[data-theme="dark"] .scene-pause-btn,
+[data-theme="dark"] .scene-resume-btn {
+  background: rgba(82, 126, 194, 0.22);
+  border-color: #4b6fa8;
+  color: #d2e3ff;
+}
+
+[data-theme="dark"] .scene-pause-btn:hover,
+[data-theme="dark"] .scene-resume-btn:hover {
+  background: rgba(82, 126, 194, 0.36);
+  border-color: #6f95d6;
+}
+
 [data-theme="dark"] .scene-delete-btn {
   border-color: #444;
   color: #888;
@@ -2349,6 +2438,22 @@ body[data-theme="dark"] {
 
 [data-theme="dark"] .surprise-style-desc {
   color: #aaa;
+}
+
+[data-theme="dark"] .surprise-mini-field {
+  color: #aab2c8;
+}
+
+[data-theme="dark"] .surprise-mini-field span {
+  color: #d2dbef;
+}
+
+[data-theme="dark"] .surprise-inline-check {
+  color: #d0d6e8;
+}
+
+[data-theme="dark"] .surprise-light-name {
+  color: #c7d0e7;
 }
 
 [data-theme="dark"] .automation-item {

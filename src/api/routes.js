@@ -263,12 +263,38 @@ function normalizeSurprisePalette(palette) {
   return normalized;
 }
 
+function normalizeSurpriseTransitionMs(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return 0;
+  return clamp(parsed, 0, 60000);
+}
+
+function normalizeSurpriseAssignmentMode(mode) {
+  return mode === 'per-light' ? 'per-light' : 'random';
+}
+
+function normalizeSurpriseLightAssignments(assignments) {
+  if (!assignments || typeof assignments !== 'object') return {};
+  const normalized = {};
+  for (const [lightId, swatchIndex] of Object.entries(assignments)) {
+    const index = Number.parseInt(swatchIndex, 10);
+    if (Number.isFinite(index) && index >= 0) {
+      normalized[String(lightId)] = index;
+    }
+  }
+  return normalized;
+}
+
 async function createSurpriseScene({
   groupId,
   style,
   name,
   basedOnSceneId = null,
-  paletteOverride = null
+  paletteOverride = null,
+  assignmentMode = 'random',
+  lightAssignments = {},
+  transitionMs = 0,
+  previewOnly = false
 }) {
   const [groupsData, lightsData] = await Promise.all([
     hueClient.getGroups(),
@@ -297,12 +323,21 @@ async function createSurpriseScene({
       : randomInt(80, 100)
   }));
 
-  const lightAssignments = [];
+  const normalizedAssignmentMode = normalizeSurpriseAssignmentMode(assignmentMode);
+  const normalizedLightAssignments = normalizeSurpriseLightAssignments(lightAssignments);
+  const transitiontime = Math.round(normalizeSurpriseTransitionMs(transitionMs) / 100);
+
+  const resolvedLightAssignments = [];
   for (const lightId of groupLightIds) {
     const light = lightsData[lightId];
     if (!light) continue;
 
-    const swatch = randomItem(palette);
+    const assignedIndex = normalizedAssignmentMode === 'per-light'
+      ? normalizedLightAssignments[String(lightId)]
+      : null;
+    const swatch = Number.isFinite(assignedIndex) && assignedIndex >= 0 && assignedIndex < palette.length
+      ? palette[assignedIndex]
+      : randomItem(palette);
     const state = { on: true };
 
     if (isDimmableType(light.type)) {
@@ -314,8 +349,11 @@ async function createSurpriseScene({
     } else if (isCtLightType(light.type)) {
       state.ct = swatchToCt(swatch);
     }
+    if (transitiontime > 0) {
+      state.transitiontime = transitiontime;
+    }
 
-    lightAssignments.push({
+    resolvedLightAssignments.push({
       lightId,
       lightName: light.name,
       swatch,
@@ -323,7 +361,7 @@ async function createSurpriseScene({
     });
   }
 
-  const updateResults = await Promise.all(lightAssignments.map(async (assignment) => {
+  const updateResults = await Promise.all(resolvedLightAssignments.map(async (assignment) => {
     try {
       const result = await hueClient.setLightState(assignment.lightId, assignment.state);
       const errors = (Array.isArray(result) ? result : [])
@@ -338,6 +376,22 @@ async function createSurpriseScene({
   const warnings = updateResults.filter((result) => result.errors.length > 0);
   const sceneName = sanitizeSceneName(name || `Surprise ${style.name}`, 'Surprise Scene');
 
+  if (previewOnly) {
+    return {
+      sceneId: null,
+      sceneName,
+      style,
+      palette,
+      warnings,
+      basedOnSceneId,
+      lightAssignments: resolvedLightAssignments.map((assignment) => ({
+        lightId: assignment.lightId,
+        lightName: assignment.lightName,
+        swatch: assignment.swatch
+      }))
+    };
+  }
+
   // Give the bridge a short moment to apply light updates before snapshotting scene state.
   await new Promise((resolve) => setTimeout(resolve, 350));
   const sceneId = await hueClient.createScene(sceneName, groupId, groupLightIds);
@@ -349,7 +403,7 @@ async function createSurpriseScene({
     palette,
     warnings,
     basedOnSceneId,
-    lightAssignments: lightAssignments.map((assignment) => ({
+    lightAssignments: resolvedLightAssignments.map((assignment) => ({
       lightId: assignment.lightId,
       lightName: assignment.lightName,
       swatch: assignment.swatch
@@ -784,7 +838,7 @@ router.post('/rooms/:groupId/surprise/remix', async (req, res) => {
 });
 
 // POST /api/rooms/:groupId/surprise/custom - Edit surprise with custom swatches and create a new scene
-// Body: { baseSceneId?: string, styleId?: string, name?: string, palette: [{hex, brightness}], replaceExisting?: boolean }
+// Body: { baseSceneId?: string, styleId?: string, name?: string, palette: [{hex, brightness}], replaceExisting?: boolean, assignmentMode?: "random"|"per-light", lightAssignments?: { [lightId]: swatchIndex }, transitionMs?: number }
 router.post('/rooms/:groupId/surprise/custom', async (req, res) => {
   try {
     const { groupId } = req.params;
@@ -793,7 +847,10 @@ router.post('/rooms/:groupId/surprise/custom', async (req, res) => {
       styleId = null,
       name = '',
       palette,
-      replaceExisting = false
+      replaceExisting = false,
+      assignmentMode = 'random',
+      lightAssignments = {},
+      transitionMs = 0
     } = req.body || {};
 
     const normalizedPalette = normalizeSurprisePalette(palette);
@@ -835,7 +892,10 @@ router.post('/rooms/:groupId/surprise/custom', async (req, res) => {
       style,
       name: requestedName || defaultName,
       basedOnSceneId: baseSceneId || null,
-      paletteOverride: normalizedPalette
+      paletteOverride: normalizedPalette,
+      assignmentMode,
+      lightAssignments,
+      transitionMs
     });
 
     let replacedSceneId = null;
@@ -864,6 +924,7 @@ router.post('/rooms/:groupId/surprise/custom', async (req, res) => {
       replacedSceneId,
       styleId: surprise.style.id,
       paletteSize: normalizedPalette.length,
+      assignmentMode: normalizeSurpriseAssignmentMode(assignmentMode),
       warningCount: surprise.warnings.length + replaceWarnings.length
     });
 
@@ -880,6 +941,8 @@ router.post('/rooms/:groupId/surprise/custom', async (req, res) => {
       },
       palette: surprise.palette,
       lightAssignments: surprise.lightAssignments,
+      assignmentMode: normalizeSurpriseAssignmentMode(assignmentMode),
+      transitionMs: normalizeSurpriseTransitionMs(transitionMs),
       warnings: [...surprise.warnings, ...replaceWarnings]
     });
   } catch (error) {
@@ -887,6 +950,83 @@ router.post('/rooms/:groupId/surprise/custom', async (req, res) => {
       ...requestContext(req),
       groupId: req.params.groupId,
       baseSceneId: req.body?.baseSceneId,
+      styleId: req.body?.styleId,
+      error
+    });
+    if (error.message === 'Room not found') {
+      return res.status(404).json({ success: false, error: error.message });
+    }
+    if (error.message === 'Room has no lights to surprise') {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST /api/rooms/:groupId/surprise/preview - Live preview swatches without creating a scene
+// Body: { styleId?: string, palette: [{hex, brightness}], assignmentMode?: "random"|"per-light", lightAssignments?: { [lightId]: swatchIndex }, transitionMs?: number }
+router.post('/rooms/:groupId/surprise/preview', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const {
+      styleId = null,
+      palette,
+      assignmentMode = 'random',
+      lightAssignments = {},
+      transitionMs = 0
+    } = req.body || {};
+
+    const normalizedPalette = normalizeSurprisePalette(palette);
+    if (!normalizedPalette) {
+      return res.status(400).json({
+        success: false,
+        error: 'palette must contain 2-8 swatches with valid hex colors and brightness (1-100)'
+      });
+    }
+
+    const style = styleId
+      ? SURPRISE_STYLE_MAP.get(styleId)
+      : {
+          id: 'preview-surprise',
+          name: 'Preview Surprise',
+          description: 'Temporary preview of surprise swatches.'
+        };
+
+    if (!style) {
+      return res.status(400).json({ success: false, error: `Unknown surprise style: ${styleId}` });
+    }
+
+    const preview = await createSurpriseScene({
+      groupId,
+      style,
+      name: `Preview ${style.name}`,
+      paletteOverride: normalizedPalette,
+      assignmentMode,
+      lightAssignments,
+      transitionMs,
+      previewOnly: true
+    });
+
+    logger.info('SURPRISE_SCENE_PREVIEW', 'Applied surprise preview', {
+      ...requestContext(req),
+      groupId,
+      assignmentMode: normalizeSurpriseAssignmentMode(assignmentMode),
+      paletteSize: normalizedPalette.length,
+      warningCount: preview.warnings.length
+    });
+
+    res.json({
+      success: true,
+      assignmentMode: normalizeSurpriseAssignmentMode(assignmentMode),
+      transitionMs: normalizeSurpriseTransitionMs(transitionMs),
+      palette: preview.palette,
+      lightAssignments: preview.lightAssignments,
+      warnings: preview.warnings
+    });
+  } catch (error) {
+    logger.error('SURPRISE_SCENE_PREVIEW_ERROR', 'Failed to preview surprise scene', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
       styleId: req.body?.styleId,
       error
     });
