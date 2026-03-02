@@ -453,6 +453,56 @@ router.get('/rooms/:roomId', (req, res) => {
   }
 });
 
+// GET /api/debug/devices/:groupId - raw discovery data for diagnosing missing accessories
+router.get('/debug/devices/:groupId', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const [roomsResp, groupsData, tempResp, motionResp, lightLevelResp, buttonResp, powerResp, connectivityResp, deviceResp] = await Promise.all([
+      hueClient.v2GetRooms(),
+      hueClient.getGroups(),
+      hueClient.v2GetTemperature(),
+      hueClient.v2GetMotion(),
+      hueClient.v2GetLightLevel(),
+      hueClient.v2GetButtons(),
+      hueClient.v2GetDevicePower(),
+      hueClient.v2GetZigbeeConnectivity(),
+      hueClient.v2GetDevices()
+    ]);
+
+    const v1Group = groupsData[groupId] || null;
+    const v2Room = (roomsResp.data || []).find(r => r.id_v1 === `/groups/${groupId}`) || null;
+
+    // Map all service resources to their owner + id_v1
+    const serviceSnapshot = [
+      ...(tempResp.data || []).map(r => ({ type: 'temperature', id: r.id, id_v1: r.id_v1, owner: r.owner?.rid })),
+      ...(motionResp.data || []).map(r => ({ type: 'motion', id: r.id, id_v1: r.id_v1, owner: r.owner?.rid })),
+      ...(lightLevelResp.data || []).map(r => ({ type: 'light_level', id: r.id, id_v1: r.id_v1, owner: r.owner?.rid })),
+      ...(buttonResp.data || []).map(r => ({ type: 'button', id: r.id, id_v1: r.id_v1, owner: r.owner?.rid })),
+      ...(powerResp.data || []).map(r => ({ type: 'device_power', id: r.id, id_v1: r.id_v1, owner: r.owner?.rid })),
+      ...(connectivityResp.data || []).map(r => ({ type: 'zigbee_connectivity', id: r.id, id_v1: r.id_v1, owner: r.owner?.rid }))
+    ];
+
+    res.json({
+      groupId,
+      v1Group: {
+        name: v1Group?.name,
+        sensors: v1Group?.sensors || [],
+        lights: v1Group?.lights || []
+      },
+      v2Room: v2Room ? {
+        id: v2Room.id,
+        id_v1: v2Room.id_v1,
+        children: v2Room.children || [],
+        services: v2Room.services || []
+      } : null,
+      allV2Devices: (deviceResp.data || []).map(d => ({ id: d.id, id_v1: d.id_v1, name: d.metadata?.name, product: d.product_data?.product_name })),
+      serviceResources: serviceSnapshot
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/health - Health check endpoint
 router.get('/health', (req, res) => {
   res.json({
