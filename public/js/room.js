@@ -247,7 +247,12 @@ function renderConnectivityDot(connectivity) {
 }
 
 function renderDeviceCard(device) {
-  const isDimmer = device.buttons && device.buttons.length > 0;
+  const productName = String(device.productName || '').toLowerCase();
+  const productArchetype = String(device.productArchetype || '').toLowerCase();
+  const isDimmer = (device.buttons && device.buttons.length > 0)
+    || productName.includes('dimmer')
+    || productArchetype.includes('dimmer')
+    || productArchetype.includes('switch');
   const name = escapeHtml(device.name || device.productName || (isDimmer ? 'Dimmer Switch' : 'Sensor'));
 
   if (isDimmer) {
@@ -354,7 +359,9 @@ function openDimmerModal(device) {
       </div>
     </div>`;
   });
-  document.getElementById('dimmer-buttons-list').innerHTML = rows.join('');
+  document.getElementById('dimmer-buttons-list').innerHTML = rows.length > 0
+    ? rows.join('')
+    : '<div class="dimmer-button-row"><div class="dimmer-button-info"><span class="dimmer-button-never">No button data available</span></div></div>';
 
   modal.classList.add('active');
 }

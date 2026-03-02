@@ -1457,6 +1457,14 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       }
     }
 
+    // Method D — v1 group.sensors via v2 device.id_v1. Some bridges omit id_v1 on
+    // service resources, but still expose it on the parent device object.
+    for (const d of (deviceResp.data || [])) {
+      if (d.id_v1 && v1SensorIds.has(d.id_v1) && !lightDeviceRids.has(d.id)) {
+        sensorDeviceRids.add(d.id);
+      }
+    }
+
     logger.debug('DEVICES_DISCOVERY', 'Accessory discovery result', {
       groupId,
       roomV2Id,
@@ -1474,7 +1482,8 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       if (sensorDeviceRids.has(d.id)) {
         deviceById[d.id] = {
           name: d.metadata?.name,
-          productName: d.product_data?.product_name
+          productName: d.product_data?.product_name,
+          productArchetype: d.product_data?.product_archetype
         };
       }
     }
@@ -1540,16 +1549,23 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       }
     }
 
-    // Merge button resources — group by owner device, sort by control_id
+    // Merge button resources — group by owner device, sort by control_id.
+    // Handle bridge variants where last event is exposed as button.last_event.
     const buttonsByDevice = {};
     for (const b of buttonResp.data || []) {
       const rid = b.owner?.rid;
       if (!deviceMap[rid]) continue;
       if (!buttonsByDevice[rid]) buttonsByDevice[rid] = [];
+      const controlIdRaw = b.metadata?.control_id ?? null;
+      const controlId = Number.isFinite(Number(controlIdRaw)) ? Number(controlIdRaw) : null;
+      const reportEvent = b.button?.button_report?.event ?? null;
+      const reportUpdated = b.button?.button_report?.updated ?? null;
+      const lastEvent = reportEvent || b.button?.last_event || null;
+      const lastUpdated = reportUpdated || b.button?.last_updated || b.updated || null;
       buttonsByDevice[rid].push({
-        controlId: b.metadata?.control_id ?? null,
-        lastEvent: b.button?.button_report?.event ?? null,
-        lastUpdated: b.button?.button_report?.updated ?? null
+        controlId,
+        lastEvent,
+        lastUpdated
       });
     }
     for (const [rid, btns] of Object.entries(buttonsByDevice)) {
