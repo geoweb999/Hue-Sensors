@@ -1326,8 +1326,10 @@ async function resolveV2Ids(v1GroupId) {
   return { roomV2Id: room.id, groupedLightId: glService.rid, lightIdMap, lightCapMap, roomDeviceRids, lightDeviceRids };
 }
 
-// GET /api/rooms/:groupId/devices - sensor devices in this room (via Hue API v2)
-// Returns temperature, motion, and light-level readings for non-light devices.
+// GET /api/rooms/:groupId/devices - sensor/accessory devices in this room (via Hue API v2)
+// Returns temperature, motion, light-level, battery, connectivity, and button readings.
+// Uses v2 room.children as the primary source, supplemented by v1 group.sensors so that
+// accessories not yet reflected in v2 room.children are never silently missed.
 // Fails silently (empty array) if v2 is unavailable so the rest of the room page is unaffected.
 router.get('/rooms/:groupId/devices', async (req, res) => {
   try {
@@ -1335,11 +1337,9 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
 
     const { roomDeviceRids, lightDeviceRids } = await resolveV2Ids(groupId);
 
-    // Sensor devices = room devices that are NOT lights (e.g. motion sensors)
-    const sensorDeviceRids = [...roomDeviceRids].filter(rid => !lightDeviceRids.has(rid));
-    if (sensorDeviceRids.length === 0) return res.json({ success: true, devices: [] });
-
-    const [tempResp, motionResp, lightLevelResp, deviceResp, powerResp, connectivityResp, buttonResp] = await Promise.all([
+    // Fetch all resources in parallel (groups needed for v1 sensor fallback)
+    const [groupsData, tempResp, motionResp, lightLevelResp, deviceResp, powerResp, connectivityResp, buttonResp] = await Promise.all([
+      hueClient.getGroups(),
       hueClient.v2GetTemperature(),
       hueClient.v2GetMotion(),
       hueClient.v2GetLightLevel(),
@@ -1349,12 +1349,25 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       hueClient.v2GetButtons()
     ]);
 
-    const sensorRidSet = new Set(sensorDeviceRids);
+    // Primary: devices in v2 room.children that aren't lights
+    const sensorDeviceRids = new Set([...roomDeviceRids].filter(rid => !lightDeviceRids.has(rid)));
+
+    // Supplement: v1 group.sensors is the authoritative list of every sensor/switch assigned
+    // to the room. Cross-reference against v2 devices by id_v1 to pick up any accessories
+    // that room.children misses (e.g. devices not yet synced to v2 room children).
+    const v1SensorIds = new Set((groupsData[groupId]?.sensors || []).map(id => `/sensors/${id}`));
+    for (const device of deviceResp.data || []) {
+      if (device.id_v1 && v1SensorIds.has(device.id_v1) && !lightDeviceRids.has(device.id)) {
+        sensorDeviceRids.add(device.id);
+      }
+    }
+
+    if (sensorDeviceRids.size === 0) return res.json({ success: true, devices: [] });
 
     // Build device name/product map
     const deviceById = {};
     for (const d of deviceResp.data || []) {
-      if (sensorRidSet.has(d.id)) {
+      if (sensorDeviceRids.has(d.id)) {
         deviceById[d.id] = {
           name: d.metadata?.name,
           productName: d.product_data?.product_name
