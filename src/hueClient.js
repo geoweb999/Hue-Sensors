@@ -135,15 +135,18 @@ class HueClient {
             }
             resolve(parsed);
           } catch (error) {
-            logger.error('HUE_ERROR', 'Failed to parse Hue v2 response', {
+            // Non-JSON response (e.g. HTML error page) means this resource type is not
+            // supported by the bridge firmware. Resolve with empty data so callers
+            // degrade gracefully rather than crashing the entire request.
+            logger.warn('HUE_WARNING', 'Hue v2 response was not valid JSON — endpoint may be unsupported on this firmware', {
               apiVersion: 'v2',
               method,
               path: safePath,
               status: res.statusCode,
               durationMs,
-              error
+              bodyPreview: data.slice(0, 120)
             });
-            reject(new Error(`Failed to parse Hue v2 API response: ${error.message}`));
+            resolve({ data: [], errors: [] });
           }
         });
       });
