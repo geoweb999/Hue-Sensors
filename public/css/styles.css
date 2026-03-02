@@ -2877,6 +2877,32 @@ body[data-theme="dark"] {
   margin-top: 0.25rem;
 }
 
+.rooms-container.layout-command {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 1.2rem;
+}
+
+.room-card--command {
+  border-top: 4px solid #2e86ba;
+}
+
+.command-stats-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.command-chip {
+  background: #e8f3fb;
+  color: #1f5f8d;
+  border-radius: 999px;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .anim-scene-card {

@@ -269,49 +269,30 @@ function renderLight(light) {
   `;
 }
 
-function renderRooms(rooms) {
-  const container = document.getElementById('rooms-container');
+function getRoomStats(room) {
+  const onCount = room.lights.filter(l => l.on).length;
+  const totalCount = room.lights.length;
+  const onReachable = room.lights.filter(l => l.on && l.reachable);
+  const avgBri = onReachable.length > 0
+    ? Math.round(onReachable.reduce((sum, l) => sum + l.brightness, 0) / onReachable.length)
+    : 0;
+  const avgPercent = Math.round((avgBri / 254) * 100);
+  return { onCount, totalCount, avgBri, avgPercent };
+}
 
-  const currentIds = new Set();
-
-  for (const room of rooms) {
-    const cardId = `room-${room.id}`;
-    currentIds.add(cardId);
-
-    let card = document.getElementById(cardId);
-    const isNew = !card;
-    if (isNew) {
-      card = document.createElement('div');
-      card.className = 'room-card';
-      card.id = cardId;
-      container.appendChild(card);
-    }
-
-    const onCount = room.lights.filter(l => l.on).length;
-    const totalCount = room.lights.length;
-
-    // Calculate average brightness of reachable, on lights
-    const onReachable = room.lights.filter(l => l.on && l.reachable);
-    const avgBri = onReachable.length > 0
-      ? Math.round(onReachable.reduce((sum, l) => sum + l.brightness, 0) / onReachable.length)
-      : 0;
-    const avgPercent = Math.round((avgBri / 254) * 100);
-
-    // Skip full rebuild if user is actively dragging the room slider
-    if (!isNew && roomSliderActive[room.id]) {
-      // Update only the light count and lights grid, leave slider alone
-      const countEl = card.querySelector('.room-light-count');
-      if (countEl) countEl.textContent = `${onCount}/${totalCount} on`;
-      const grid = card.querySelector('.lights-grid');
-      if (grid) grid.innerHTML = room.lights.map(light => renderLight(light)).join('');
-      continue;
-    }
-
-    card.innerHTML = `
+function renderRoomCardCommand(room) {
+  const { onCount, totalCount, avgBri, avgPercent } = getRoomStats(room);
+  return `
+    <article class="room-card room-card--command" id="room-${room.id}">
       <div class="room-header room-header-link" data-room-id="${room.id}" title="Open ${escapeHtml(room.name)} detail">
         <div class="room-name">${escapeHtml(room.name)}</div>
         <span class="room-light-count">${onCount}/${totalCount} on</span>
         <span class="room-detail-arrow">&#8250;</span>
+      </div>
+      <div class="command-stats-row">
+        <span class="command-chip">${totalCount} fixtures</span>
+        <span class="command-chip">${avgPercent}% avg</span>
+        <span class="command-chip">${room.lights.filter(l => !l.reachable).length} offline</span>
       </div>
       <div class="room-brightness-control">
         <label>Room Brightness: <span class="room-bri-value">${avgPercent}%</span></label>
@@ -323,15 +304,15 @@ function renderRooms(rooms) {
       <div class="lights-grid">
         ${room.lights.map(light => renderLight(light)).join('')}
       </div>
-    `;
-  }
+    </article>
+  `;
+}
 
-  // Remove stale cards
-  for (const card of container.querySelectorAll('.room-card')) {
-    if (!currentIds.has(card.id)) {
-      card.remove();
-    }
-  }
+function renderRooms(rooms) {
+  const container = document.getElementById('rooms-container');
+  container.classList.remove('layout-scene', 'layout-split');
+  container.classList.add('layout-command');
+  container.innerHTML = rooms.map(renderRoomCardCommand).join('');
 }
 
 // ── Data Fetching ────────────────────────────────────────────────
