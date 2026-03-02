@@ -310,7 +310,12 @@ function renderDeviceCard(device) {
 function renderDevices(devices) {
   const grid = document.getElementById('devices-grid');
   if (!grid) return;
-  grid.innerHTML = (devices || []).map(renderDeviceCard).join('');
+  const list = Array.isArray(devices) ? devices : [];
+  if (list.length === 0) {
+    grid.innerHTML = '<p class="no-items-msg">No accessories found for this room.</p>';
+    return;
+  }
+  grid.innerHTML = list.map(renderDeviceCard).join('');
 }
 
 // ── Dimmer modal ──────────────────────────────────────────────────────────────
@@ -688,18 +693,22 @@ async function fetchAndRenderRoom() {
 }
 
 async function fetchAndRenderDevices() {
+  const section = document.getElementById('devices-section');
+  const grid = document.getElementById('devices-grid');
+  if (!section || !grid) return;
   try {
     const res = await fetch(`/api/rooms/${roomId}/devices`);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    if (!data.success || !data.devices?.length) return;
+    if (!data.success) throw new Error(data.error || 'Failed to fetch room accessories');
 
-    deviceData = data.devices;
+    deviceData = Array.isArray(data.devices) ? data.devices : [];
     renderDevices(deviceData);
-    const section = document.getElementById('devices-section');
-    if (section) section.classList.remove('hidden');
+    section.classList.remove('hidden');
   } catch {
-    // v2 unavailable — section stays hidden silently
+    deviceData = [];
+    grid.innerHTML = '';
+    section.classList.add('hidden');
   }
 }
 

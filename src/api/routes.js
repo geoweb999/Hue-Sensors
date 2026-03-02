@@ -1385,12 +1385,11 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
   try {
     const { groupId } = req.params;
 
-    const { roomV2Id, roomDeviceRids, lightDeviceRids } = await resolveV2Ids(groupId);
-
-    // Fetch all resources in parallel — rooms needed to build device→room map
-    const [roomsResp, groupsData, tempResp, motionResp, lightLevelResp, deviceResp, powerResp, connectivityResp, buttonResp] = await Promise.all([
+    // Fetch all resources in parallel (do not require grouped_light mapping for accessory discovery)
+    const [roomsResp, groupsData, lightsResp, tempResp, motionResp, lightLevelResp, deviceResp, powerResp, connectivityResp, buttonResp] = await Promise.all([
       hueClient.v2GetRooms(),
       hueClient.getGroups(),
+      hueClient.v2GetLights(),
       hueClient.v2GetTemperature(),
       hueClient.v2GetMotion(),
       hueClient.v2GetLightLevel(),
@@ -1401,6 +1400,20 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
     ]);
 
     const sensorDeviceRids = new Set();
+    const room = (roomsResp.data || []).find((entry) => entry.id_v1 === `/groups/${groupId}`) || null;
+    const roomV2Id = room?.id || null;
+    const roomDeviceRids = new Set(
+      (room?.children || [])
+        .filter((child) => child.rtype === 'device')
+        .map((child) => child.rid)
+    );
+    const groupLightV1Ids = new Set((groupsData[groupId]?.lights || []).map((id) => `/lights/${id}`));
+    const lightDeviceRids = new Set();
+    for (const light of (lightsResp.data || [])) {
+      if (light.owner?.rid && groupLightV1Ids.has(light.id_v1)) {
+        lightDeviceRids.add(light.owner.rid);
+      }
+    }
 
     // Method A — v2 room.children (direct device entries for our room)
     for (const rid of roomDeviceRids) {
@@ -1425,10 +1438,12 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
       ...(powerResp.data || []),
       ...(connectivityResp.data || [])
     ];
-    for (const svc of allServiceResources) {
-      const ownerRid = svc.owner?.rid;
-      if (ownerRid && deviceToRoomV2Id.get(ownerRid) === roomV2Id && !lightDeviceRids.has(ownerRid)) {
-        sensorDeviceRids.add(ownerRid);
+    if (roomV2Id) {
+      for (const svc of allServiceResources) {
+        const ownerRid = svc.owner?.rid;
+        if (ownerRid && deviceToRoomV2Id.get(ownerRid) === roomV2Id && !lightDeviceRids.has(ownerRid)) {
+          sensorDeviceRids.add(ownerRid);
+        }
       }
     }
 
@@ -1543,8 +1558,8 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
 
     res.json({ success: true, devices: Object.values(deviceMap) });
   } catch (err) {
-    logger.error('DEVICES_FETCH_ERROR', 'Failed to fetch room sensor devices', { error: err.message });
-    res.status(500).json({ success: false, error: err.message });
+    logger.warn('DEVICES_FETCH_ERROR', 'Failed to fetch room sensor devices; returning empty list', { error: err.message });
+    res.json({ success: true, devices: [] });
   }
 });
 
