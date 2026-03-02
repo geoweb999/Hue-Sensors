@@ -1353,12 +1353,20 @@ router.get('/rooms/:groupId/devices', async (req, res) => {
     const sensorDeviceRids = new Set([...roomDeviceRids].filter(rid => !lightDeviceRids.has(rid)));
 
     // Supplement: v1 group.sensors is the authoritative list of every sensor/switch assigned
-    // to the room. Cross-reference against v2 devices by id_v1 to pick up any accessories
-    // that room.children misses (e.g. devices not yet synced to v2 room children).
+    // to the room. The reliable id_v1 fields live on the *service* resources (temperature,
+    // motion, light_level, button) — not on the device resource itself — so we scan those
+    // and follow owner.rid back to the device.
     const v1SensorIds = new Set((groupsData[groupId]?.sensors || []).map(id => `/sensors/${id}`));
-    for (const device of deviceResp.data || []) {
-      if (device.id_v1 && v1SensorIds.has(device.id_v1) && !lightDeviceRids.has(device.id)) {
-        sensorDeviceRids.add(device.id);
+    const serviceResources = [
+      ...(tempResp.data || []),
+      ...(motionResp.data || []),
+      ...(lightLevelResp.data || []),
+      ...(buttonResp.data || [])
+    ];
+    for (const svc of serviceResources) {
+      const ownerRid = svc.owner?.rid;
+      if (ownerRid && svc.id_v1 && v1SensorIds.has(svc.id_v1) && !lightDeviceRids.has(ownerRid)) {
+        sensorDeviceRids.add(ownerRid);
       }
     }
 
