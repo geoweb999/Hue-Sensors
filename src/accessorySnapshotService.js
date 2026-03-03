@@ -304,18 +304,27 @@ function buildDevicesForGroup(groupId, resources) {
   if (!hasPresenceInExpanded) {
     const roomNameNorm = normalizeName(group.name);
     if (roomNameNorm) {
+      const matchedPresenceCandidates = [];
       for (const [sid, sensor] of Object.entries(sensors || {})) {
         const type = String(sensor?.type || '').toLowerCase();
         const sensorNameNorm = normalizeName(sensor?.name);
         if (!type.includes('presence') || !sensorNameNorm) continue;
         if (!sensorNameNorm.includes(roomNameNorm) && !roomNameNorm.includes(sensorNameNorm)) continue;
+        matchedPresenceCandidates.push({
+          sid: String(sid),
+          base: String(sensor?.uniqueid || '').split('-')[0] || null
+        });
+      }
 
-        const base = String(sensor?.uniqueid || '').split('-')[0] || null;
-        expandedRoomSensorIds.add(String(sid));
-        if (base) {
+      // Avoid ambiguous cross-room matches when multiple presence sensors
+      // loosely match the room name.
+      if (matchedPresenceCandidates.length === 1) {
+        const candidate = matchedPresenceCandidates[0];
+        expandedRoomSensorIds.add(candidate.sid);
+        if (candidate.base) {
           for (const [otherSid, otherSensor] of Object.entries(sensors || {})) {
             const otherBase = String(otherSensor?.uniqueid || '').split('-')[0] || null;
-            if (otherBase && otherBase === base) expandedRoomSensorIds.add(String(otherSid));
+            if (otherBase && otherBase === candidate.base) expandedRoomSensorIds.add(String(otherSid));
           }
         }
       }
@@ -378,35 +387,41 @@ function buildDevicesForGroup(groupId, resources) {
     const rid = v1SensorIdToDeviceRid.get(sid) || (base ? v1UniqueBaseToDeviceRid.get(base) : null) || `v1:${sid}`;
     ensureDevice(rid, sensor.name || `Sensor ${sid}`);
 
-    if (sensor?.config?.battery != null) deviceMap[rid].battery = { level: sensor.config.battery, state: null };
-    if (sensor?.config?.reachable != null) deviceMap[rid].connectivity = { status: sensor.config.reachable ? 'connected' : 'disconnected' };
+    if (sensor?.config?.battery != null && !deviceMap[rid].battery) {
+      deviceMap[rid].battery = { level: sensor.config.battery, state: null };
+    }
+    if (sensor?.config?.reachable != null && !deviceMap[rid].connectivity) {
+      deviceMap[rid].connectivity = { status: sensor.config.reachable ? 'connected' : 'disconnected' };
+    }
 
     const type = String(sensor.type || '').toLowerCase();
-    if (type.includes('presence')) {
+    if (type.includes('presence') && !deviceMap[rid].motion?.valid) {
       deviceMap[rid].motion = {
         detected: !!sensor.state?.presence,
         valid: true,
         lastChanged: normalizeV1Ts(sensor.state?.lastupdated)
       };
     }
-    if (type.includes('temperature') && sensor.state?.temperature != null) {
+    if (type.includes('temperature') && sensor.state?.temperature != null && !deviceMap[rid].temperature?.valid) {
       deviceMap[rid].temperature = {
         celsius: Number(sensor.state.temperature) / 100,
         valid: true
       };
     }
-    if (type.includes('lightlevel') && sensor.state?.lightlevel != null) {
+    if (type.includes('lightlevel') && sensor.state?.lightlevel != null && !deviceMap[rid].lightLevel?.valid) {
       const raw = Number(sensor.state.lightlevel);
       const lux = Number.isFinite(raw) ? Math.round(Math.pow(10, (raw - 1) / 10000)) : null;
       deviceMap[rid].lightLevel = { lux, valid: lux != null };
     }
     if (sensor.state?.buttonevent != null) {
       deviceMap[rid].deviceKind = 'dimmer';
-      const mapped = v1ButtonEventToV2(sensor.state.buttonevent);
-      const row = { controlId: mapped.controlId, lastEvent: mapped.event, lastUpdated: normalizeV1Ts(sensor.state?.lastupdated) };
-      const existing = deviceMap[rid].buttons.findIndex((b) => b.controlId === row.controlId);
-      if (existing >= 0) deviceMap[rid].buttons[existing] = row;
-      else deviceMap[rid].buttons.push(row);
+      if ((deviceMap[rid].buttons || []).length === 0) {
+        const mapped = v1ButtonEventToV2(sensor.state.buttonevent);
+        const row = { controlId: mapped.controlId, lastEvent: mapped.event, lastUpdated: normalizeV1Ts(sensor.state?.lastupdated) };
+        const existing = deviceMap[rid].buttons.findIndex((b) => b.controlId === row.controlId);
+        if (existing >= 0) deviceMap[rid].buttons[existing] = row;
+        else deviceMap[rid].buttons.push(row);
+      }
     }
     if (type.includes('switch')) deviceMap[rid].deviceKind = 'dimmer';
   }
@@ -424,11 +439,12 @@ class AccessorySnapshotService {
   constructor() {
     this.snapshots = new Map();
     this.intervalHandle = null;
+    this.refreshInFlight = null;
     this.lastError = null;
     this.lastUpdated = null;
   }
 
-  async refreshAll() {
+  async _refreshAllInternal() {
     const startedAt = Date.now();
     try {
       const resources = await fetchResources();
@@ -524,6 +540,17 @@ class AccessorySnapshotService {
     }
   }
 
+  async refreshAll() {
+    if (this.refreshInFlight) return this.refreshInFlight;
+    this.refreshInFlight = this._refreshAllInternal();
+    try {
+      await this.refreshInFlight;
+    } finally {
+      this.refreshInFlight = null;
+    }
+    return null;
+  }
+
   start(intervalMs = 10000) {
     if (this.intervalHandle) return;
     this.refreshAll();
@@ -536,6 +563,7 @@ class AccessorySnapshotService {
     if (!this.intervalHandle) return;
     clearInterval(this.intervalHandle);
     this.intervalHandle = null;
+    this.refreshInFlight = null;
   }
 
   getRoomSnapshot(groupId) {

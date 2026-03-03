@@ -5,6 +5,8 @@ const REFRESH_INTERVAL = 10000;
 let refreshIntervalId = null;
 let roomId = null;
 let roomData = null;
+let roomFetchSequence = 0;
+let deviceFetchSequence = 0;
 const lightInputActive = {};   // true while user is dragging/editing a light control
 const lightSendTimeouts = {};  // debounce timers per light
 let roomColorWheel = null;
@@ -704,10 +706,12 @@ function showError(msg) {
 // ── Fetch ─────────────────────────────────────────────────────────
 
 async function fetchAndRenderRoom() {
+  const requestSeq = ++roomFetchSequence;
   try {
     const res = await fetch(`/api/rooms/${roomId}/detail`);
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'API error');
+    if (requestSeq !== roomFetchSequence) return;
 
     roomData = data.room;
     document.getElementById('loading').classList.add('hidden');
@@ -722,6 +726,7 @@ async function fetchAndRenderRoom() {
 }
 
 async function fetchAndRenderDevices() {
+  const requestSeq = ++deviceFetchSequence;
   const section = document.getElementById('devices-section');
   const grid = document.getElementById('devices-grid');
   if (!section || !grid) return;
@@ -730,6 +735,7 @@ async function fetchAndRenderDevices() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'Failed to fetch room accessories');
+    if (requestSeq !== deviceFetchSequence) return;
 
     deviceData = Array.isArray(data.devices) ? data.devices : [];
     deviceSnapshotMeta = {
@@ -741,6 +747,7 @@ async function fetchAndRenderDevices() {
     section.classList.remove('hidden');
     renderRoomLayoutShowcase();
   } catch {
+    if (requestSeq !== deviceFetchSequence) return;
     deviceData = [];
     deviceSnapshotMeta = {
       stale: true,
