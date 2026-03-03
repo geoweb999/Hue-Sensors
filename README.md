@@ -8,6 +8,12 @@ A real-time web application that monitors and visualizes temperature, light leve
 
 This dashboard continuously polls your Philips Hue Bridge to collect environmental data from Hue motion sensors. It displays current conditions and historical trends through interactive graphs, making it easy to monitor temperature patterns and occupancy in different rooms of your home.
 
+## Agent Documentation
+
+For technical handoff context aimed at coding agents (architecture, module ownership, API map, data flow, storage schema, snapshot diagnostics pipeline, and debugging workflow), see:
+
+- `docs/AGENT_TECHNICAL_GUIDE.md`
+
 ### Key Features
 
 - **Real-time Monitoring**: Continuously polls Hue Bridge at configurable intervals (default: 10 seconds)
