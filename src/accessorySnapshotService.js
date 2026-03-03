@@ -32,6 +32,26 @@ function resolveResourceDeviceRid(serviceRidToDeviceRid, resource) {
   return serviceRidToDeviceRid.get(ownerRid) || ownerRid;
 }
 
+function addDeviceAreaMembership(deviceToAreaMap, deviceRid, areaId) {
+  if (!deviceRid || !areaId) return;
+  if (!deviceToAreaMap.has(deviceRid)) deviceToAreaMap.set(deviceRid, new Set());
+  deviceToAreaMap.get(deviceRid).add(areaId);
+}
+
+function isDeviceInArea(deviceToAreaMap, deviceRid, areaId) {
+  if (!deviceRid || !areaId) return false;
+  return deviceToAreaMap.get(deviceRid)?.has(areaId) || false;
+}
+
+function hasCriticalSnapshotFailures(failedKeys) {
+  const failed = new Set(failedKeys || []);
+  if (failed.has('devices')) return true;
+  if (failed.has('lights')) return true;
+  if (failed.has('rooms') && failed.has('zones')) return true;
+  if (failed.has('groups') && failed.has('sensors')) return true;
+  return false;
+}
+
 async function fetchResources() {
   const requests = [
     { key: 'rooms', fn: () => hueClient.v2GetRooms() },
@@ -52,6 +72,7 @@ async function fetchResources() {
   const asList = (resp) => (resp && Array.isArray(resp.data) ? resp.data : []);
   const asObj = (resp) => (resp && typeof resp === 'object' && !Array.isArray(resp) ? resp : {});
   const fetchErrors = [];
+  const failedKeys = [];
   const byKey = {};
   settled.forEach((result, index) => {
     const key = requests[index].key;
@@ -60,6 +81,7 @@ async function fetchResources() {
       return;
     }
     byKey[key] = null;
+    failedKeys.push(key);
     fetchErrors.push(`${key}: ${normalizeSnapshotErrorMessage(result.reason)}`);
   });
 
@@ -76,7 +98,8 @@ async function fetchResources() {
     connectivities: asList(byKey.connectivities),
     buttons: asList(byKey.buttons),
     sensors: asObj(byKey.sensors),
-    fetchErrors
+    fetchErrors,
+    failedKeys
   };
 }
 
@@ -102,10 +125,10 @@ function buildDevicesForGroup(groupId, resources) {
       .map((child) => child.rid)
   );
 
-  const deviceToAreaV2Id = new Map();
+  const deviceToAreaV2Ids = new Map();
   for (const area of [...rooms, ...zones]) {
     for (const child of (area.children || [])) {
-      if (child.rtype === 'device') deviceToAreaV2Id.set(child.rid, area.id);
+      if (child.rtype === 'device') addDeviceAreaMembership(deviceToAreaV2Ids, child.rid, area.id);
     }
   }
 
@@ -118,7 +141,7 @@ function buildDevicesForGroup(groupId, resources) {
       continue;
     }
     // v1 groups can be unavailable; fall back to room/zone area mapping.
-    if (roomV2Id && deviceToAreaV2Id.get(light.owner.rid) === roomV2Id) {
+    if (roomV2Id && isDeviceInArea(deviceToAreaV2Ids, light.owner.rid, roomV2Id)) {
       lightDeviceRids.add(light.owner.rid);
     }
   }
@@ -148,7 +171,7 @@ function buildDevicesForGroup(groupId, resources) {
   if (roomV2Id) {
     for (const svc of allServiceResources) {
       const ownerRid = resolveResourceDeviceRid(serviceRidToDeviceRid, svc);
-      if (ownerRid && deviceToAreaV2Id.get(ownerRid) === roomV2Id && !lightDeviceRids.has(ownerRid)) {
+      if (ownerRid && isDeviceInArea(deviceToAreaV2Ids, ownerRid, roomV2Id) && !lightDeviceRids.has(ownerRid)) {
         sensorDeviceRids.add(ownerRid);
       }
     }
@@ -409,6 +432,7 @@ class AccessorySnapshotService {
     const startedAt = Date.now();
     try {
       const resources = await fetchResources();
+      const refreshedAt = Date.now();
       const groupIdsFromV1 = Object.keys(resources.groups || {}).filter((gid) => {
         const g = resources.groups[gid] || {};
         return g.type === 'Room' || (Array.isArray(g.sensors) && g.sensors.length > 0);
@@ -423,21 +447,62 @@ class AccessorySnapshotService {
       const partialError = (resources.fetchErrors || []).length > 0
         ? `Partial snapshot data: ${(resources.fetchErrors || []).join(' | ')}`
         : null;
+      const criticalFailure = hasCriticalSnapshotFailures(resources.failedKeys);
+
+      if (criticalFailure && this.snapshots.size > 0) {
+        this.lastError = partialError || 'Accessory snapshot refresh skipped due to critical partial failure.';
+        for (const [groupId, snapshot] of this.snapshots.entries()) {
+          this.snapshots.set(groupId, {
+            ...snapshot,
+            stale: true,
+            lastError: this.lastError
+          });
+        }
+        logger.warn('ACCESSORY_SNAPSHOT_REFRESH_PARTIAL_RETAINED', 'Accessory snapshots retained due to critical partial failure', {
+          durationMs: Date.now() - startedAt,
+          roomCount: this.snapshots.size,
+          failedKeys: resources.failedKeys || []
+        });
+        return;
+      }
 
       const nextSnapshots = new Map();
       for (const groupId of groupIds) {
         const devices = buildDevicesForGroup(groupId, resources);
         nextSnapshots.set(groupId, {
           devices,
-          stale: false,
-          lastUpdated: Date.now(),
+          stale: !!criticalFailure,
+          lastUpdated: refreshedAt,
           lastError: partialError
         });
       }
 
+      if (partialError && this.snapshots.size > 0) {
+        for (const [groupId, previousSnapshot] of this.snapshots.entries()) {
+          if (!nextSnapshots.has(groupId)) {
+            nextSnapshots.set(groupId, {
+              ...previousSnapshot,
+              stale: true,
+              lastError: partialError
+            });
+            continue;
+          }
+          const nextSnapshot = nextSnapshots.get(groupId);
+          const nextDevices = Array.isArray(nextSnapshot?.devices) ? nextSnapshot.devices : [];
+          const prevDevices = Array.isArray(previousSnapshot?.devices) ? previousSnapshot.devices : [];
+          if (nextDevices.length === 0 && prevDevices.length > 0) {
+            nextSnapshots.set(groupId, {
+              ...previousSnapshot,
+              stale: true,
+              lastError: partialError
+            });
+          }
+        }
+      }
+
       this.snapshots = nextSnapshots;
       this.lastError = partialError;
-      this.lastUpdated = Date.now();
+      this.lastUpdated = refreshedAt;
       logger.info('ACCESSORY_SNAPSHOT_REFRESH_SUCCESS', 'Accessory snapshots refreshed', {
         durationMs: Date.now() - startedAt,
         roomCount: nextSnapshots.size,
