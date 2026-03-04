@@ -212,7 +212,8 @@ function buildChoreographyPalette(basePalette, mode, softness, lightCount) {
   const palette = Array.isArray(basePalette) ? basePalette : [];
   if (palette.length <= 1) return palette.slice();
 
-  const targetSize = clamp(Math.max(palette.length, Math.min(lightCount, 10)), 2, 12);
+  // Hue scene palette schema currently limits color entries to 9.
+  const targetSize = clamp(Math.max(palette.length, Math.min(lightCount, 9)), 2, 9);
   const positions = buildChoreographyPositions(targetSize, mode);
   const generated = positions.map((position) => sampleGradientSwatch(palette, position, softness));
 
