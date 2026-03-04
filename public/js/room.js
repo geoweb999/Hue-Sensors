@@ -34,6 +34,7 @@ const ROOM_OPS_MODE_DESCRIPTIONS = {
 };
 const ROOM_OPS_MODE_STORAGE_KEY = 'roomOpsMode';
 let currentRoomOpsMode = 'timeline';
+let sceneEditData = null;      // { sceneId, originalLights, lightstates }
 
 const CHOREOGRAPHY_MODE_LABELS = {
   left_to_right: 'Left → Right',
@@ -400,6 +401,155 @@ function openDimmerModal(device) {
 function closeDimmerModal() {
   const modal = document.getElementById('dimmer-modal');
   if (modal) modal.classList.remove('active');
+}
+
+// ── Scene Light Editor ────────────────────────────────────────────────────────
+
+function buildSceneEditLightRow(light, sceneState) {
+  const inScene = !!sceneState;
+  let initialHex = '#ffffff';
+  if (sceneState?.xy) {
+    const rgb = xyBriToRgb(sceneState.xy[0], sceneState.xy[1], sceneState.bri ?? 254);
+    initialHex = rgbToHex(rgb.r, rgb.g, rgb.b);
+  } else if (sceneState?.ct) {
+    const rgb = ctToRgb(sceneState.ct);
+    initialHex = rgbToHex(rgb.r, rgb.g, rgb.b);
+  } else if (light.xy) {
+    const rgb = xyBriToRgb(light.xy[0], light.xy[1], light.brightness ?? 254);
+    initialHex = rgbToHex(rgb.r, rgb.g, rgb.b);
+  }
+  const bri = Math.round(((sceneState?.bri ?? light.brightness ?? 254) / 254) * 100);
+  const isColor = isColorLight(light.type);
+  const isDim = isDimmable(light.type);
+
+  return `<div class="scene-edit-light-row${inScene ? '' : ' scene-edit-excluded'}" data-light-id="${light.id}">
+    <label class="scene-edit-check-label">
+      <input type="checkbox" class="scene-edit-include" ${inScene ? 'checked' : ''}>
+      <span class="scene-edit-light-name">${escapeHtml(light.name)}</span>
+    </label>
+    <div class="scene-edit-controls">
+      ${isColor ? `<span class="scene-edit-swatch" style="background:${initialHex}"></span>
+        <input type="color" class="scene-edit-color" value="${initialHex}" title="Color">` : ''}
+      ${isDim ? `<input type="range" class="scene-edit-bri" min="1" max="100" value="${bri}" title="Brightness">
+        <span class="scene-edit-bri-label">${bri}%</span>` : ''}
+    </div>
+  </div>`;
+}
+
+async function openSceneEditModal(sceneId) {
+  const modal = document.getElementById('scene-edit-modal');
+  const list = document.getElementById('scene-edit-light-list');
+  const title = document.getElementById('scene-edit-title');
+  const saveBtn = document.getElementById('scene-edit-save-btn');
+  if (!modal || !list) return;
+
+  const scene = (roomData?.scenes || []).find(s => s.id === sceneId);
+  title.textContent = `Edit Scene: ${scene?.name || ''}`;
+  list.innerHTML = '<p class="scene-edit-loading">Loading scene data\u2026</p>';
+  saveBtn.disabled = true;
+  modal.classList.add('active');
+
+  try {
+    const res = await fetch(`/api/scenes/${sceneId}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+
+    sceneEditData = {
+      sceneId,
+      originalLights: data.scene.lights || [],
+      lightstates: data.scene.lightstates || {}
+    };
+
+    const lights = roomData?.lights || [];
+    list.innerHTML = lights.map(l =>
+      buildSceneEditLightRow(l, data.scene.lightstates?.[l.id] || null)
+    ).join('');
+
+    list.querySelectorAll('.scene-edit-light-row').forEach(row => {
+      const colorInput = row.querySelector('.scene-edit-color');
+      const swatch = row.querySelector('.scene-edit-swatch');
+      const briInput = row.querySelector('.scene-edit-bri');
+      const briLabel = row.querySelector('.scene-edit-bri-label');
+      const checkbox = row.querySelector('.scene-edit-include');
+
+      colorInput?.addEventListener('input', () => {
+        if (swatch) swatch.style.background = colorInput.value;
+      });
+      briInput?.addEventListener('input', () => {
+        if (briLabel) briLabel.textContent = `${briInput.value}%`;
+      });
+      checkbox?.addEventListener('change', () => {
+        row.classList.toggle('scene-edit-excluded', !checkbox.checked);
+      });
+    });
+
+    saveBtn.disabled = false;
+  } catch (err) {
+    list.innerHTML = `<p class="scene-edit-error">Failed to load scene: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function closeSceneEditModal() {
+  document.getElementById('scene-edit-modal')?.classList.remove('active');
+  sceneEditData = null;
+}
+
+async function saveSceneEdit() {
+  if (!sceneEditData) return;
+  const saveBtn = document.getElementById('scene-edit-save-btn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving\u2026';
+
+  const rows = document.querySelectorAll('#scene-edit-light-list .scene-edit-light-row');
+  const lights = [];
+  const lightstates = {};
+
+  rows.forEach(row => {
+    const lightId = row.dataset.lightId;
+    const checked = row.querySelector('.scene-edit-include')?.checked;
+    if (!checked) return;
+
+    lights.push(lightId);
+    const colorInput = row.querySelector('.scene-edit-color');
+    const briInput = row.querySelector('.scene-edit-bri');
+    const state = { on: true };
+
+    if (colorInput) {
+      const rgb = hexToRgb(colorInput.value);
+      if (rgb) state.xy = rgbToXy(rgb.r, rgb.g, rgb.b);
+    }
+    if (briInput) {
+      state.bri = Math.round((parseInt(briInput.value, 10) / 100) * 254);
+    }
+    lightstates[lightId] = state;
+  });
+
+  try {
+    const res = await fetch(`/api/scenes/${sceneEditData.sceneId}/lightstates`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lights, lightstates })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+    closeSceneEditModal();
+  } catch (err) {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save Changes';
+    alert(`Failed to save: ${err.message}`);
+  }
+}
+
+function initSceneEditModal() {
+  document.getElementById('scene-edit-close')?.addEventListener('click', closeSceneEditModal);
+  document.getElementById('scene-edit-cancel-btn')?.addEventListener('click', closeSceneEditModal);
+  document.getElementById('scene-edit-save-btn')?.addEventListener('click', saveSceneEdit);
+  document.getElementById('scene-edit-modal')?.addEventListener('click', e => {
+    if (e.target === document.getElementById('scene-edit-modal')) closeSceneEditModal();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.getElementById('scene-edit-modal')?.classList.contains('active')) closeSceneEditModal();
+  });
 }
 
 function initDimmerModal() {
@@ -2089,11 +2239,20 @@ function initSceneControls() {
     }
   });
 
-  // Edit surprise with custom swatches (colors + brightness)
+  // Edit scene: surprise scenes → palette editor, standard scenes → per-light editor
   grid.addEventListener('click', (e) => {
     const btn = e.target.closest('.scene-edit-btn');
     if (!btn) return;
-    openSurpriseEditor(btn.dataset.sceneId);
+    const sceneId = btn.dataset.sceneId;
+    const scene = (roomData?.scenes || []).find(s => s.id === sceneId);
+    const meta = loadSurpriseSceneMeta(roomId);
+    const displayName = (scene?.name || '').replace(/-Animation$/, '').trim();
+    const isSurprise = /^surprise\b/i.test(displayName) || !!meta?.[sceneId];
+    if (isSurprise) {
+      openSurpriseEditor(sceneId);
+    } else {
+      openSceneEditModal(sceneId);
+    }
   });
 
   // Animate surprise scene using dynamic palette rotation and preset speed
@@ -3219,6 +3378,7 @@ async function init() {
   initSceneControls();
   initSurpriseEditorModal();
   initAnimBuilderModal();
+  initSceneEditModal();
   initDimmerModal();
   initRoomOpsModePicker();
 

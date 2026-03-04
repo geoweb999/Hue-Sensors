@@ -1368,6 +1368,50 @@ router.put('/scenes/:sceneId', async (req, res) => {
   }
 });
 
+// GET /api/scenes/:sceneId - Fetch full scene data including per-light lightstates
+router.get('/scenes/:sceneId', async (req, res) => {
+  try {
+    const { sceneId } = req.params;
+    const scene = await hueClient.getScene(sceneId);
+    if (!scene || Array.isArray(scene)) {
+      return res.status(404).json({ success: false, error: 'Scene not found' });
+    }
+    res.json({ success: true, scene });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// PUT /api/scenes/:sceneId/lightstates - Update scene light membership and per-light stored states
+router.put('/scenes/:sceneId/lightstates', async (req, res) => {
+  try {
+    const { sceneId } = req.params;
+    const { lights, lightstates } = req.body || {};
+
+    // Update which lights are in the scene
+    if (Array.isArray(lights)) {
+      await hueClient.updateScene(sceneId, { lights });
+    }
+
+    // Update per-light stored state (sequential — Hue bridge rate limit)
+    const results = [];
+    for (const [lightId, state] of Object.entries(lightstates || {})) {
+      const r = await hueClient.setSceneLightState(sceneId, lightId, state);
+      results.push({ lightId, result: r });
+    }
+
+    logger.info('SCENE_LIGHTSTATES_UPDATE', 'Scene lightstates updated', {
+      ...requestContext(req), sceneId, lightCount: results.length
+    });
+    res.json({ success: true, results });
+  } catch (error) {
+    logger.error('SCENE_LIGHTSTATES_UPDATE_ERROR', 'Failed to update scene lightstates', {
+      ...requestContext(req), sceneId: req.params.sceneId, error
+    });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // PUT /api/rooms/:groupId/state - Set group state (all lights in room)
 router.put('/rooms/:groupId/state', async (req, res) => {
   try {

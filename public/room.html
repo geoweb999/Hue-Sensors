@@ -171,6 +171,20 @@
     </div>
   </main>
 
+  <!-- Scene Light Editor modal -->
+  <div id="scene-edit-modal" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-content scene-edit-modal-content">
+      <button class="close-btn" id="scene-edit-close" aria-label="Close">&times;</button>
+      <h2 id="scene-edit-title">Edit Scene</h2>
+      <p class="scene-edit-subtitle">Select lights and set their color and brightness.</p>
+      <div id="scene-edit-light-list" class="scene-edit-light-list"></div>
+      <div class="scene-edit-actions">
+        <button id="scene-edit-cancel-btn" class="btn-secondary">Cancel</button>
+        <button id="scene-edit-save-btn" class="btn-primary">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Dimmer switch detail modal -->
   <div id="dimmer-modal" class="modal" role="dialog" aria-modal="true">
     <div class="modal-content dimmer-modal-content">
