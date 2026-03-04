@@ -169,9 +169,9 @@ class HueClient {
             }
             resolve(parsed);
           } catch (error) {
-            // Non-JSON response (e.g. HTML error page) means this resource type is not
-            // supported by the bridge firmware. Resolve with empty data so callers
-            // degrade gracefully rather than crashing the entire request.
+            const parseError = responseMeta.isHtml
+              ? new Error('Hue bridge returned HTML instead of JSON. Check bridge IP, API token, and bridge availability.')
+              : new Error('Hue bridge returned a non-JSON v2 response.');
             logger.warn('HUE_WARNING', 'Hue v2 response was not valid JSON — endpoint may be unsupported on this firmware', {
               apiVersion: 'v2',
               method,
@@ -179,9 +179,10 @@ class HueClient {
               status: res.statusCode,
               durationMs,
               contentType: responseMeta.contentType,
-              bodyPreview: responseMeta.preview
+              bodyPreview: responseMeta.preview,
+              error: parseError.message
             });
-            resolve({ data: [], errors: [] });
+            reject(parseError);
           }
         });
       });

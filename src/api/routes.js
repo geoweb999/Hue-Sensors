@@ -772,13 +772,33 @@ router.get('/lights', async (req, res) => {
 router.get('/rooms/:groupId/detail', async (req, res) => {
   try {
     const { groupId } = req.params;
-    const [lightsData, groupsData, scenesData, schedulesData, rulesData] = await Promise.all([
+    const settled = await Promise.allSettled([
       hueClient.getLights(),
       hueClient.getGroups(),
       hueClient.getScenes(),
       hueClient.getSchedules(),
       hueClient.getRules()
     ]);
+    const partialErrors = [];
+    const asObject = (result, key) => {
+      if (result.status === 'fulfilled' && result.value && typeof result.value === 'object' && !Array.isArray(result.value)) {
+        return result.value;
+      }
+      const reason = result.status === 'rejected'
+        ? (result.reason?.message || String(result.reason))
+        : 'invalid response shape';
+      partialErrors.push(`${key}: ${reason}`);
+      return {};
+    };
+    const lightsData = asObject(settled[0], 'lights');
+    const groupsData = asObject(settled[1], 'groups');
+    const scenesData = asObject(settled[2], 'scenes');
+    const schedulesData = asObject(settled[3], 'schedules');
+    const rulesData = asObject(settled[4], 'rules');
+
+    if (Object.keys(groupsData).length === 0) {
+      throw new Error('Unable to load room groups from bridge');
+    }
 
     const group = groupsData[groupId];
     if (!group || group.type !== 'Room') {
@@ -847,7 +867,8 @@ router.get('/rooms/:groupId/detail', async (req, res) => {
         scenes,
         schedules,
         rules
-      }
+      },
+      warnings: partialErrors
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1535,6 +1556,23 @@ router.get('/rooms/:groupId/devices', (req, res) => {
   });
 });
 
+// GET /api/rooms/:groupId/dynamic-scenes - server-persisted dynamic scene metadata
+router.get('/rooms/:groupId/dynamic-scenes', (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const database = getDatabase();
+    const scenes = database.getDynamicScenesByGroup(groupId);
+    res.json({ success: true, scenes });
+  } catch (error) {
+    logger.error('DYNAMIC_SCENE_LIST_ERROR', 'Failed to fetch dynamic scenes for room', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      error
+    });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // GET /api/rooms/:groupId/loops/status - current server-side loop status for this room
 router.get('/rooms/:groupId/loops/status', (req, res) => {
   try {
@@ -1829,6 +1867,16 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
     await new Promise((resolve) => setTimeout(resolve, 350));
     await hueClient.v2RecallScene(sceneId, 'dynamic_palette', speed).catch(() => {});
 
+    const database = getDatabase();
+    database.upsertDynamicScene({
+      sceneId,
+      groupId,
+      name: name.trim(),
+      palette: effectivePalette,
+      speed: clamp(Number(speed) || 0.5, 0.1, 1),
+      choreography: choreographyConfig
+    });
+
     res.json({ success: true, sceneId, choreography: choreographyConfig });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1863,6 +1911,8 @@ router.delete('/v2/scenes/:sceneId', async (req, res) => {
     if (errors.length > 0) {
       return res.status(400).json({ success: false, errors });
     }
+    const database = getDatabase();
+    database.deleteDynamicSceneById(sceneId);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

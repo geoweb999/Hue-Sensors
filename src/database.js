@@ -78,6 +78,20 @@ class HueDatabase {
       )
     `);
 
+    // Create persistent dynamic scene metadata table (shared across clients)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS dynamic_scenes (
+        scene_id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        palette_json TEXT NOT NULL,
+        speed REAL NOT NULL DEFAULT 0.5,
+        choreography_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
     // Store schema version
     const versionStmt = this.db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
     versionStmt.run('schema_version', '1.0');
@@ -167,6 +181,35 @@ class HueDatabase {
 
       deleteSceneLoopByGroup: this.db.prepare(`
         DELETE FROM scene_loops WHERE group_id = ?
+      `),
+
+      upsertDynamicScene: this.db.prepare(`
+        INSERT INTO dynamic_scenes (
+          scene_id, group_id, name, palette_json, speed, choreography_json, created_at, updated_at
+        ) VALUES (
+          @scene_id, @group_id, @name, @palette_json, @speed, @choreography_json, @created_at, @updated_at
+        )
+        ON CONFLICT(scene_id) DO UPDATE SET
+          group_id = excluded.group_id,
+          name = excluded.name,
+          palette_json = excluded.palette_json,
+          speed = excluded.speed,
+          choreography_json = excluded.choreography_json,
+          updated_at = excluded.updated_at
+      `),
+
+      getDynamicScenesByGroup: this.db.prepare(`
+        SELECT * FROM dynamic_scenes
+        WHERE group_id = ?
+        ORDER BY LOWER(name) ASC, scene_id ASC
+      `),
+
+      getDynamicSceneById: this.db.prepare(`
+        SELECT * FROM dynamic_scenes WHERE scene_id = ?
+      `),
+
+      deleteDynamicSceneById: this.db.prepare(`
+        DELETE FROM dynamic_scenes WHERE scene_id = ?
       `)
     };
   }
@@ -353,6 +396,66 @@ class HueDatabase {
 
   deleteSceneLoopByGroup(groupId) {
     return this.stmts.deleteSceneLoopByGroup.run(String(groupId)).changes;
+  }
+
+  parseDynamicSceneRow(row) {
+    if (!row) return null;
+    let palette = [];
+    let choreography = null;
+    try {
+      const parsedPalette = JSON.parse(row.palette_json || '[]');
+      if (Array.isArray(parsedPalette)) palette = parsedPalette;
+    } catch {
+      palette = [];
+    }
+    try {
+      const parsedChoreography = JSON.parse(row.choreography_json || 'null');
+      if (parsedChoreography && typeof parsedChoreography === 'object') choreography = parsedChoreography;
+    } catch {
+      choreography = null;
+    }
+    return {
+      sceneId: String(row.scene_id),
+      groupId: String(row.group_id),
+      name: String(row.name || ''),
+      palette,
+      speed: Number(row.speed) || 0.5,
+      choreography,
+      createdAt: Number(row.created_at) || null,
+      updatedAt: Number(row.updated_at) || null
+    };
+  }
+
+  upsertDynamicScene(scene) {
+    const now = Date.now();
+    const existing = this.stmts.getDynamicSceneById.get(String(scene.sceneId));
+    this.stmts.upsertDynamicScene.run({
+      scene_id: String(scene.sceneId),
+      group_id: String(scene.groupId),
+      name: String(scene.name || '').trim() || `Dynamic ${scene.sceneId}`,
+      palette_json: JSON.stringify(Array.isArray(scene.palette) ? scene.palette : []),
+      speed: Number(scene.speed) || 0.5,
+      choreography_json: scene.choreography ? JSON.stringify(scene.choreography) : null,
+      created_at: existing ? existing.created_at : now,
+      updated_at: now
+    });
+    return this.getDynamicSceneById(scene.sceneId);
+  }
+
+  getDynamicScenesByGroup(groupId) {
+    return this.stmts.getDynamicScenesByGroup
+      .all(String(groupId))
+      .map((row) => this.parseDynamicSceneRow(row))
+      .filter(Boolean);
+  }
+
+  getDynamicSceneById(sceneId) {
+    const row = this.stmts.getDynamicSceneById.get(String(sceneId));
+    return this.parseDynamicSceneRow(row);
+  }
+
+  deleteDynamicSceneById(sceneId) {
+    return this.stmts.deleteDynamicSceneById.run(String(sceneId)).changes;
   }
 
   // Vacuum database to reclaim space

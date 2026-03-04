@@ -722,7 +722,7 @@ function snapshotRoomLightStates(lights) {
       on: !!light.on,
       bri: Number(light.brightness) || 0,
       hue: Number(light.hue) || 0,
-      sat: Number(light.saturation) || 0,
+      sat: Number(light.sat) || 0,
       ct: Number(light.ct) || 0,
       x: Array.isArray(light.xy) ? Number(light.xy[0]) : null,
       y: Array.isArray(light.xy) ? Number(light.xy[1]) : null
@@ -805,6 +805,9 @@ async function fetchAndRenderRoom() {
     renderRoom(data.room);
     fetchAndRenderDevices(); // refresh sensor readings on every poll
     refreshRoomLoopStatus({ silent: true });
+    if (v2AnimationsAvailable) {
+      refreshDynamicScenesFromServer({ silent: true });
+    }
   } catch (error) {
     showError(`Connection error: ${error.message}`);
     updateStatus('error', 'Connection failed');
@@ -1508,7 +1511,7 @@ function rotatePalette(palette, offset = 0) {
 
 function upsertDynamicSceneStorage(sceneId, name, palette, speed, choreography = null) {
   if (!roomId || !sceneId) return;
-  const scenes = loadAnimScenes(roomId);
+  const scenes = loadAnimScenes();
   const entry = {
     sceneId,
     name,
@@ -1522,13 +1525,13 @@ function upsertDynamicSceneStorage(sceneId, name, palette, speed, choreography =
   } else {
     scenes.push(entry);
   }
-  saveAnimScenes(roomId, scenes);
+  setAnimScenes(scenes);
 }
 
 function removeDynamicSceneStorage(sceneId) {
   if (!roomId || !sceneId) return;
-  const scenes = loadAnimScenes(roomId).filter((scene) => scene.sceneId !== sceneId);
-  saveAnimScenes(roomId, scenes);
+  const scenes = loadAnimScenes().filter((scene) => scene.sceneId !== sceneId);
+  setAnimScenes(scenes);
 }
 
 function makeSurpriseSwatchRow(hex = '#ffffff', brightness = 75) {
@@ -2498,6 +2501,7 @@ let v2RoomInfo = null; // { roomV2Id, groupedLightId, lightIdMap }
 let activeDynamicSceneId = null; // sceneId currently looping on the bridge
 let roomLoopStatus = null; // server-owned room loop status
 let v2AnimationsAvailable = false;
+let roomDynamicScenes = []; // server-persisted dynamic scene metadata
 
 const EFFECTS = [
   { id: 'candle',     label: '🕯 Candle' },
@@ -2519,14 +2523,45 @@ function speedLabel(value) {
   return 'Very Fast';
 }
 
-// localStorage helpers
-function loadAnimScenes(rid) {
-  try {
-    return JSON.parse(localStorage.getItem(`hueV2Scenes_${rid}`) || '[]');
-  } catch { return []; }
+function normalizeDynamicSceneEntry(scene) {
+  if (!scene || typeof scene !== 'object') return null;
+  const sceneId = String(scene.sceneId || '').trim();
+  if (!sceneId) return null;
+  return {
+    sceneId,
+    name: String(scene.name || `Dynamic ${sceneId}`),
+    palette: Array.isArray(scene.palette) ? scene.palette : [],
+    speed: clampNumber(parseFloat(scene.speed) || 0.5, 0.1, 1),
+    choreography: normalizeChoreographyConfig(scene.choreography)
+  };
 }
-function saveAnimScenes(rid, scenes) {
-  localStorage.setItem(`hueV2Scenes_${rid}`, JSON.stringify(scenes));
+
+function loadAnimScenes() {
+  return roomDynamicScenes.slice();
+}
+
+function setAnimScenes(scenes) {
+  roomDynamicScenes = (Array.isArray(scenes) ? scenes : [])
+    .map((scene) => normalizeDynamicSceneEntry(scene))
+    .filter(Boolean);
+}
+
+async function refreshDynamicScenesFromServer({ silent = false } = {}) {
+  if (!roomId) return [];
+  try {
+    const res = await fetch(`/api/rooms/${roomId}/dynamic-scenes`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to fetch dynamic scenes');
+    setAnimScenes(data.scenes || []);
+    renderDynamicScenesList();
+    renderLoopSceneCandidateList();
+    return loadAnimScenes();
+  } catch (error) {
+    if (!silent) {
+      console.warn('Dynamic scene refresh error:', error.message);
+    }
+    return loadAnimScenes();
+  }
 }
 
 function getCurrentLoopCheckedKeys() {
@@ -2566,7 +2601,7 @@ function buildLoopSceneCandidates() {
   }
 
   if (v2AnimationsAvailable) {
-    for (const scene of loadAnimScenes(roomId)) {
+    for (const scene of loadAnimScenes()) {
       const sceneId = String(scene?.sceneId || '').trim();
       if (!sceneId) continue;
       const key = `v2:${sceneId}`;
@@ -2725,7 +2760,7 @@ function renderDynamicSceneCard(scene) {
 function renderDynamicScenesList() {
   const list = document.getElementById('anim-dynamic-scenes-list');
   if (!list) return;
-  const scenes = loadAnimScenes(roomId);
+  const scenes = loadAnimScenes();
   if (scenes.length === 0) {
     list.innerHTML = '<p class="no-items-msg">No dynamic scenes saved yet.</p>';
   } else {
@@ -2757,6 +2792,7 @@ async function initAnimationSection() {
   } catch (err) {
     v2RoomInfo = null;
     v2AnimationsAvailable = false;
+    setAnimScenes([]);
     console.warn('Hue v2 API not available for this room:', err.message);
     if (animSection) {
       animSection.querySelector('p.anim-section-hint').textContent = `Hue v2 dynamic effects unavailable: ${err.message}. Scene loop playlists for regular scenes are still available.`;
@@ -2767,7 +2803,7 @@ async function initAnimationSection() {
 
   if (v2AnimationsAvailable) {
     renderEffectChips();
-    renderDynamicScenesList();
+    await refreshDynamicScenesFromServer({ silent: true });
   }
 
   // Effect chip clicks — apply effect to whole room
@@ -2873,10 +2909,9 @@ async function initAnimationSection() {
       delBtn.disabled = true;
       try {
         await fetch(`/api/v2/scenes/${sceneId}`, { method: 'DELETE' });
-        // Remove from localStorage regardless of bridge result
-        const scenes = loadAnimScenes(roomId).filter(s => s.sceneId !== sceneId);
-        saveAnimScenes(roomId, scenes);
-        renderDynamicScenesList();
+        // Optimistically update local cache, then re-sync from server.
+        removeDynamicSceneStorage(sceneId);
+        await refreshDynamicScenesFromServer({ silent: true });
       } catch (err) {
         console.error('Delete error:', err.message);
         delBtn.disabled = false;
@@ -3052,7 +3087,7 @@ function openAnimModal(scene = null) {
     if (choreoSoftnessSlider) choreoSoftnessSlider.value = String(choreography.softness);
     updateSoftnessLabel(choreoSoftnessLabel, choreography.softness);
     (scene.palette || []).forEach(p => framesList.appendChild(makeFrameRow(p.hex, p.brightness || 80)));
-    editingSceneIndex = loadAnimScenes(roomId).findIndex(s => s.sceneId === scene.sceneId);
+    editingSceneIndex = loadAnimScenes().findIndex(s => s.sceneId === scene.sceneId);
   } else {
     title.textContent = 'New Dynamic Scene';
     nameInput.value = '';
@@ -3141,7 +3176,7 @@ function initAnimBuilderModal() {
     try {
       // If editing, delete the old bridge scene first
       if (editingSceneIndex >= 0) {
-        const existing = loadAnimScenes(roomId)[editingSceneIndex];
+        const existing = loadAnimScenes()[editingSceneIndex];
         if (existing?.sceneId) {
           await fetch(`/api/v2/scenes/${existing.sceneId}`, { method: 'DELETE' }).catch(() => {});
         }
@@ -3155,16 +3190,7 @@ function initAnimBuilderModal() {
       const data = await res.json();
       if (!data.success) throw new Error((data.errors?.[0]?.description) || data.error || 'Failed');
 
-      // Persist to localStorage
-      const scenes = loadAnimScenes(roomId);
-      const sceneEntry = { sceneId: data.sceneId, name, palette, speed, choreography };
-      if (editingSceneIndex >= 0) {
-        scenes[editingSceneIndex] = sceneEntry;
-      } else {
-        scenes.push(sceneEntry);
-      }
-      saveAnimScenes(roomId, scenes);
-      renderDynamicScenesList();
+      await refreshDynamicScenesFromServer({ silent: true });
       closeAnimModal();
     } catch (err) {
       saveBtn.textContent = 'Error — retry?';

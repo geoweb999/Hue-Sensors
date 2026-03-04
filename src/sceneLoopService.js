@@ -39,6 +39,9 @@ function normalizeDwellMs(value) {
   return clamp(Number.isFinite(parsed) ? parsed : 8000, 1000, 60 * 60 * 1000);
 }
 
+const MAX_CONSECUTIVE_FAILURES = 5;
+const MAX_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
+
 function nextLoopIndex(loop, currentIndex) {
   const length = Array.isArray(loop.playlist) ? loop.playlist.length : 0;
   if (length <= 1) return 0;
@@ -143,7 +146,7 @@ class SceneLoopService {
     const nextLoop = this.normalizeLoopPayload(groupId, payload);
     const saved = this.db.upsertSceneLoop(nextLoop);
     if (saved.isRunning) {
-      this.scheduleLoopTick(groupId, false);
+      this.scheduleLoopTick(groupId, { immediate: false });
     }
     return saved;
   }
@@ -178,7 +181,7 @@ class SceneLoopService {
       : this.normalizeLoopPayload(groupId, { isRunning: true }, existing);
 
     const saved = this.db.upsertSceneLoop({ ...loop, lastError: null });
-    this.scheduleLoopTick(groupId, true);
+    this.scheduleLoopTick(groupId, { immediate: true });
     return saved;
   }
 
@@ -206,8 +209,12 @@ class SceneLoopService {
     this.db.deleteSceneLoopByGroup(groupId);
   }
 
-  scheduleLoopTick(groupId, immediate = false) {
+  scheduleLoopTick(groupId, options = {}) {
     const key = String(groupId);
+    const immediate = typeof options === 'boolean' ? options : !!options?.immediate;
+    const delayOverride = typeof options === 'object' && options
+      ? Number.parseInt(options.delayMs, 10)
+      : null;
     const loop = this.db.getSceneLoopByGroup(key);
     if (!loop || !loop.isRunning || !Array.isArray(loop.playlist) || loop.playlist.length === 0) {
       const runtime = this.runtime.get(key);
@@ -219,10 +226,14 @@ class SceneLoopService {
     const prevRuntime = this.runtime.get(key);
     if (prevRuntime?.timer) clearTimeout(prevRuntime.timer);
 
+    const waitMs = Number.isFinite(delayOverride) && delayOverride >= 0
+      ? delayOverride
+      : (immediate ? 0 : loop.dwellMs);
     const generation = (prevRuntime?.generation || 0) + 1;
     const runtime = {
       generation,
       busy: false,
+      consecutiveFailures: prevRuntime?.consecutiveFailures || 0,
       timer: setTimeout(() => {
         this.runTick(key, generation).catch((error) => {
           logger.error('SCENE_LOOP_TICK_ERROR', 'Scene loop tick failed', {
@@ -230,7 +241,7 @@ class SceneLoopService {
             error
           });
         });
-      }, immediate ? 0 : loop.dwellMs)
+      }, waitMs)
     };
 
     this.runtime.set(key, runtime);
@@ -251,15 +262,18 @@ class SceneLoopService {
 
     const index = clamp(Number(loop.currentIndex) || 0, 0, loop.playlist.length - 1);
     const item = loop.playlist[index];
+    let nextDelayMs = null;
 
     try {
       await this.executeLoopItem(key, item);
       const nextIndex = nextLoopIndex(loop, index);
-      loop = this.db.upsertSceneLoop({
-        ...loop,
+      runtime.consecutiveFailures = 0;
+      const latestLoop = this.db.getSceneLoopByGroup(key);
+      loop = latestLoop ? this.db.upsertSceneLoop({
+        ...latestLoop,
         currentIndex: nextIndex,
         lastError: null
-      });
+      }) : null;
 
       logger.info('SCENE_LOOP_STEP', 'Scene loop step executed', {
         groupId: key,
@@ -271,10 +285,28 @@ class SceneLoopService {
       });
     } catch (error) {
       const message = normalizeLoopError(error);
-      loop = this.db.upsertSceneLoop({
-        ...loop,
-        lastError: message
-      });
+      runtime.consecutiveFailures = (runtime.consecutiveFailures || 0) + 1;
+      const shouldStop = runtime.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES;
+      const latestLoop = this.db.getSceneLoopByGroup(key);
+      const nextError = shouldStop
+        ? `${message} (auto-stopped after ${runtime.consecutiveFailures} consecutive failures)`
+        : message;
+      loop = latestLoop ? this.db.upsertSceneLoop({
+        ...latestLoop,
+        isRunning: shouldStop ? false : !!latestLoop.isRunning,
+        lastError: nextError
+      }) : null;
+      if (!shouldStop) {
+        const exponent = Math.min(runtime.consecutiveFailures - 1, 6);
+        nextDelayMs = Math.min((Number(loop?.dwellMs) || 8000) * (2 ** exponent), MAX_FAILURE_BACKOFF_MS);
+      } else {
+        logger.warn('SCENE_LOOP_AUTO_STOP', 'Scene loop auto-stopped after repeated failures', {
+          groupId: key,
+          sceneId: item?.sceneId,
+          sceneType: item?.sceneType,
+          failureCount: runtime.consecutiveFailures
+        });
+      }
       logger.warn('SCENE_LOOP_STEP_FAILED', 'Scene loop step failed', {
         groupId: key,
         sceneId: item?.sceneId,
@@ -286,8 +318,10 @@ class SceneLoopService {
     }
 
     if (loop?.isRunning) {
-      this.scheduleLoopTick(key, false);
+      this.scheduleLoopTick(key, { immediate: false, delayMs: nextDelayMs });
+      return;
     }
+    this.runtime.delete(key);
   }
 
   async executeLoopItem(groupId, item) {

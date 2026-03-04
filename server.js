@@ -35,9 +35,15 @@ app.use('/api', attachRequestId, apiRoutes);
 // Polling interval reference
 let pollingInterval;
 let stopHueEventStream = null;
+let pollInFlight = false;
 
 // Polling function
 async function pollHueBridge() {
+  if (pollInFlight) {
+    logger.warn('POLL_SKIPPED_OVERLAP', 'Skipping poll because a previous poll is still in flight');
+    return;
+  }
+  pollInFlight = true;
   const startedAt = Date.now();
   try {
     logger.debug('POLL_START', 'Polling Hue bridge started');
@@ -61,6 +67,8 @@ async function pollHueBridge() {
       durationMs: Date.now() - startedAt,
       error
     });
+  } finally {
+    pollInFlight = false;
   }
 }
 
