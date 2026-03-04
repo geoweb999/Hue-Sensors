@@ -712,6 +712,80 @@ function showError(msg) {
   document.getElementById('error-message').textContent = msg;
 }
 
+function snapshotRoomLightStates(lights) {
+  const map = new Map();
+  for (const light of (lights || [])) {
+    if (!light || !light.id) continue;
+    map.set(light.id, {
+      on: !!light.on,
+      bri: Number(light.brightness) || 0,
+      hue: Number(light.hue) || 0,
+      sat: Number(light.saturation) || 0,
+      ct: Number(light.ct) || 0,
+      x: Array.isArray(light.xy) ? Number(light.xy[0]) : null,
+      y: Array.isArray(light.xy) ? Number(light.xy[1]) : null
+    });
+  }
+  return map;
+}
+
+function detectLightMotionFromSnapshot(beforeSnapshot, lights) {
+  if (!(beforeSnapshot instanceof Map) || beforeSnapshot.size === 0) return false;
+  const afterSnapshot = snapshotRoomLightStates(lights);
+  for (const [lightId, before] of beforeSnapshot.entries()) {
+    const after = afterSnapshot.get(lightId);
+    if (!after) continue;
+    if (before.on !== after.on) return true;
+    if (Math.abs(before.bri - after.bri) >= 2) return true;
+    if (Math.abs(before.hue - after.hue) >= 200) return true;
+    if (Math.abs(before.sat - after.sat) >= 2) return true;
+    if (Math.abs(before.ct - after.ct) >= 2) return true;
+    if (Number.isFinite(before.x) && Number.isFinite(before.y) && Number.isFinite(after.x) && Number.isFinite(after.y)) {
+      const distance = Math.hypot(before.x - after.x, before.y - after.y);
+      if (distance >= 0.0025) return true;
+    }
+  }
+  return false;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchRoomLightsForVerification() {
+  const res = await fetch(`/api/rooms/${roomId}/detail`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error || 'Failed to fetch room detail');
+  return data.room?.lights || [];
+}
+
+function showAnimationVerificationMessage(message) {
+  const el = document.getElementById('last-update');
+  if (!el) return;
+  const previous = el.textContent;
+  el.textContent = message;
+  setTimeout(() => {
+    if (el.textContent === message) el.textContent = previous;
+  }, 5000);
+}
+
+async function verifyAnimationMovement(baselineLights) {
+  const baselineSnapshot = snapshotRoomLightStates(baselineLights);
+  if (baselineSnapshot.size === 0) return null;
+  const probesMs = [900, 1500, 2100];
+  for (const waitMs of probesMs) {
+    await delay(waitMs);
+    try {
+      const lights = await fetchRoomLightsForVerification();
+      if (detectLightMotionFromSnapshot(baselineSnapshot, lights)) return true;
+    } catch {
+      return null;
+    }
+  }
+  return false;
+}
+
 // ── Fetch ─────────────────────────────────────────────────────────
 
 async function fetchAndRenderRoom() {
@@ -2037,6 +2111,7 @@ function initSceneControls() {
     const speed = getSelectedSurpriseAnimationSpeed();
     const choreography = getSelectedSurpriseChoreography();
     const animationName = `${surpriseScene.name} Animation`.slice(0, 32);
+    const baselineLights = Array.isArray(roomData?.lights) ? roomData.lights : [];
 
     btn.disabled = true;
     btn.textContent = 'Animating...';
@@ -2102,6 +2177,15 @@ function initSceneControls() {
 
       btn.textContent = 'Looping';
       btn.disabled = false;
+      verifyAnimationMovement(baselineLights).then((confirmed) => {
+        if (confirmed === true) {
+          showAnimationVerificationMessage('Animation confirmed: lights are changing.');
+          return;
+        }
+        if (confirmed === false) {
+          showAnimationVerificationMessage('Animation command sent, but no light movement detected yet. Try faster speed or higher-contrast colors.');
+        }
+      });
     } catch (err) {
       btn.textContent = 'Error';
       setTimeout(() => {
@@ -2545,6 +2629,7 @@ async function initAnimationSection() {
     if (playBtn) {
       const sceneId = playBtn.dataset.sceneId;
       const speed = parseFloat(playBtn.dataset.speed) || 0.5;
+      const baselineLights = Array.isArray(roomData?.lights) ? roomData.lights : [];
       playBtn.disabled = true;
       playBtn.textContent = '...';
       try {
@@ -2559,6 +2644,15 @@ async function initAnimationSection() {
         setSurpriseAnimatingByAnimationScene(sceneId, true);
         renderDynamicScenesList(); // re-render all cards to show looping state
         renderScenes(roomData?.scenes || []);
+        verifyAnimationMovement(baselineLights).then((confirmed) => {
+          if (confirmed === true) {
+            showAnimationVerificationMessage('Animation confirmed: lights are changing.');
+            return;
+          }
+          if (confirmed === false) {
+            showAnimationVerificationMessage('Animation command sent, but no light movement detected yet. Try faster speed or higher-contrast colors.');
+          }
+        });
       } catch (err) {
         console.error('Play error:', err.message);
         playBtn.textContent = '▶ Play';
