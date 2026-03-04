@@ -2588,6 +2588,96 @@ body[data-theme="dark"] {
 }
 [data-theme="dark"] .anim-builder-title { color: #e0e0e0; }
 
+.anim-loop-builder {
+  margin-top: 1.1rem;
+  padding-top: 1rem;
+  border-top: 1px dashed rgba(102, 126, 234, 0.35);
+}
+[data-theme="dark"] .anim-loop-builder {
+  border-top-color: rgba(139, 156, 247, 0.4);
+}
+
+.anim-loop-scene-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 0.7rem;
+}
+
+.anim-loop-scene-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid rgba(102, 126, 234, 0.2);
+  border-radius: 8px;
+  background: rgba(102, 126, 234, 0.06);
+  cursor: pointer;
+}
+[data-theme="dark"] .anim-loop-scene-row {
+  border-color: rgba(139, 156, 247, 0.28);
+  background: rgba(139, 156, 247, 0.09);
+}
+
+.anim-loop-scene-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.84rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.anim-loop-scene-badge {
+  font-size: 0.72rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  background: rgba(118, 75, 162, 0.13);
+  color: #5f4791;
+  white-space: nowrap;
+}
+[data-theme="dark"] .anim-loop-scene-badge {
+  background: rgba(155, 89, 182, 0.28);
+  color: #d8b5ea;
+}
+
+.anim-loop-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.anim-loop-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.anim-loop-status {
+  margin-top: 0.6rem;
+  font-size: 0.83rem;
+  color: #667;
+}
+.anim-loop-status.running {
+  color: #1f6f3f;
+  font-weight: 600;
+}
+.anim-loop-status.error {
+  color: #a73737;
+}
+[data-theme="dark"] .anim-loop-status {
+  color: #a3adbd;
+}
+[data-theme="dark"] .anim-loop-status.running {
+  color: #7adf97;
+}
+[data-theme="dark"] .anim-loop-status.error {
+  color: #f2a5a5;
+}
+
 .anim-dynamic-scenes-list {
   display: flex;
   flex-direction: column;

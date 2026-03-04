@@ -4,6 +4,7 @@ import { getDatabase } from '../database.js';
 import { hueClient } from '../hueClient.js';
 import { logger } from '../logger.js';
 import { accessorySnapshotService } from '../accessorySnapshotService.js';
+import { sceneLoopService } from '../sceneLoopService.js';
 
 const router = express.Router();
 
@@ -1532,6 +1533,112 @@ router.get('/rooms/:groupId/devices', (req, res) => {
     lastUpdated: snapshot.lastUpdated || null,
     lastError: snapshot.lastError || null
   });
+});
+
+// GET /api/rooms/:groupId/loops/status - current server-side loop status for this room
+router.get('/rooms/:groupId/loops/status', (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const loop = sceneLoopService.getLoopStatus(groupId);
+    res.json({ success: true, loop });
+  } catch (error) {
+    logger.error('SCENE_LOOP_STATUS_ERROR', 'Failed to fetch scene loop status', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      error
+    });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST /api/rooms/:groupId/loops - create/update loop config without starting automatically
+// Body: { playlist: [{sceneId, sceneType, action?, speed?, name?}], dwellMs?, mode?, currentIndex? }
+router.post('/rooms/:groupId/loops', (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const loop = sceneLoopService.setLoop(groupId, req.body || {});
+    logger.info('SCENE_LOOP_CONFIG_SET', 'Scene loop configuration updated', {
+      ...requestContext(req),
+      groupId,
+      isRunning: !!loop.isRunning,
+      playlistLength: Array.isArray(loop.playlist) ? loop.playlist.length : 0,
+      dwellMs: loop.dwellMs,
+      mode: loop.mode
+    });
+    res.json({ success: true, loop });
+  } catch (error) {
+    logger.warn('SCENE_LOOP_CONFIG_REJECTED', 'Scene loop configuration rejected', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      error: error.message
+    });
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+// POST /api/rooms/:groupId/loops/start - start loop immediately (optionally with new config)
+router.post('/rooms/:groupId/loops/start', (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const hasConfigPayload = req.body && Object.keys(req.body).length > 0;
+    const loop = sceneLoopService.startLoop(groupId, hasConfigPayload ? req.body : null);
+    logger.info('SCENE_LOOP_STARTED', 'Scene loop started', {
+      ...requestContext(req),
+      groupId,
+      playlistLength: Array.isArray(loop.playlist) ? loop.playlist.length : 0,
+      dwellMs: loop.dwellMs,
+      mode: loop.mode
+    });
+    res.json({ success: true, loop });
+  } catch (error) {
+    logger.warn('SCENE_LOOP_START_REJECTED', 'Scene loop start rejected', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      error: error.message
+    });
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+// POST /api/rooms/:groupId/loops/stop - stop loop execution for this room
+router.post('/rooms/:groupId/loops/stop', (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const loop = sceneLoopService.stopLoop(groupId);
+    logger.info('SCENE_LOOP_STOPPED', 'Scene loop stopped', {
+      ...requestContext(req),
+      groupId,
+      playlistLength: Array.isArray(loop.playlist) ? loop.playlist.length : 0
+    });
+    res.json({ success: true, loop });
+  } catch (error) {
+    logger.error('SCENE_LOOP_STOP_ERROR', 'Failed to stop scene loop', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      error
+    });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// DELETE /api/rooms/:groupId/loops - remove loop config completely
+router.delete('/rooms/:groupId/loops', (req, res) => {
+  try {
+    const { groupId } = req.params;
+    sceneLoopService.clearLoop(groupId);
+    logger.info('SCENE_LOOP_CLEARED', 'Scene loop configuration removed', {
+      ...requestContext(req),
+      groupId
+    });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('SCENE_LOOP_CLEAR_ERROR', 'Failed to clear scene loop', {
+      ...requestContext(req),
+      groupId: req.params.groupId,
+      error
+    });
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // GET /api/v2/rooms/:groupId/info - v2 IDs for a room (used by frontend on page load)

@@ -134,6 +134,34 @@
         <div id="anim-dynamic-scenes-list" class="anim-dynamic-scenes-list"></div>
         <button id="anim-new-scene-btn" class="anim-new-scene-btn">+ New Dynamic Scene</button>
       </div>
+      <div class="anim-loop-builder">
+        <h3 class="anim-builder-title">Scene Loop Playlist</h3>
+        <p class="anim-section-hint">Select scenes and run them in a server-side loop. Looping continues until you stop it.</p>
+        <div id="anim-loop-scene-list" class="anim-loop-scene-list"></div>
+        <div class="anim-loop-controls">
+          <label class="surprise-mini-field">Dwell
+            <select id="anim-loop-dwell-ms" class="surprise-style-select">
+              <option value="3000">3s</option>
+              <option value="5000">5s</option>
+              <option value="8000" selected>8s</option>
+              <option value="12000">12s</option>
+              <option value="20000">20s</option>
+            </select>
+          </label>
+          <label class="surprise-mini-field">Order
+            <select id="anim-loop-mode" class="surprise-style-select">
+              <option value="sequential" selected>Sequential</option>
+              <option value="shuffle">Shuffle</option>
+            </select>
+          </label>
+        </div>
+        <div class="anim-loop-actions">
+          <button id="anim-loop-save-btn" class="anim-add-frame-btn">Save Playlist</button>
+          <button id="anim-loop-start-btn" class="anim-new-scene-btn">Start Loop</button>
+          <button id="anim-loop-stop-btn" class="btn-ghost">Stop Loop</button>
+        </div>
+        <div id="anim-loop-status" class="anim-loop-status"></div>
+      </div>
     </div>
 
     <!-- Automations section -->

@@ -687,6 +687,8 @@ function renderRoom(data) {
   // Animation effects section — always show (v2 check happens inside initAnimationSection)
   const animSection = document.getElementById('anim-section');
   if (animSection) animSection.classList.remove('hidden');
+  const checkedKeys = getCurrentLoopCheckedKeys();
+  renderLoopSceneCandidateList(checkedKeys.size > 0 ? checkedKeys : getLoopSelectionKeysFromStatus());
 
   renderRoomLayoutShowcase();
 }
@@ -802,6 +804,7 @@ async function fetchAndRenderRoom() {
     updateLastUpdateTime();
     renderRoom(data.room);
     fetchAndRenderDevices(); // refresh sensor readings on every poll
+    refreshRoomLoopStatus({ silent: true });
   } catch (error) {
     showError(`Connection error: ${error.message}`);
     updateStatus('error', 'Connection failed');
@@ -2493,6 +2496,8 @@ function initSceneControls() {
 // v2 IDs for this room — resolved once on init
 let v2RoomInfo = null; // { roomV2Id, groupedLightId, lightIdMap }
 let activeDynamicSceneId = null; // sceneId currently looping on the bridge
+let roomLoopStatus = null; // server-owned room loop status
+let v2AnimationsAvailable = false;
 
 const EFFECTS = [
   { id: 'candle',     label: '🕯 Candle' },
@@ -2522,6 +2527,175 @@ function loadAnimScenes(rid) {
 }
 function saveAnimScenes(rid, scenes) {
   localStorage.setItem(`hueV2Scenes_${rid}`, JSON.stringify(scenes));
+}
+
+function getCurrentLoopCheckedKeys() {
+  return new Set(
+    Array.from(document.querySelectorAll('#anim-loop-scene-list input[type=\"checkbox\"]:checked'))
+      .map((input) => String(input.value || '').trim())
+      .filter(Boolean)
+  );
+}
+
+function getLoopSelectionKeysFromStatus() {
+  if (!roomLoopStatus || !Array.isArray(roomLoopStatus.playlist)) return new Set();
+  return new Set(
+    roomLoopStatus.playlist
+      .map((item) => `${item.sceneType === 'v2' ? 'v2' : 'v1'}:${String(item.sceneId || '')}`)
+      .filter((key) => key !== 'v1:' && key !== 'v2:')
+  );
+}
+
+function buildLoopSceneCandidates() {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const scene of (roomData?.scenes || [])) {
+    const sceneId = String(scene?.id || '').trim();
+    if (!sceneId) continue;
+    const key = `v1:${sceneId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({
+      key,
+      sceneId,
+      sceneType: 'v1',
+      name: scene.name || `Scene ${sceneId}`,
+      source: 'Scene'
+    });
+  }
+
+  if (v2AnimationsAvailable) {
+    for (const scene of loadAnimScenes(roomId)) {
+      const sceneId = String(scene?.sceneId || '').trim();
+      if (!sceneId) continue;
+      const key = `v2:${sceneId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({
+        key,
+        sceneId,
+        sceneType: 'v2',
+        name: scene.name || `Dynamic ${sceneId}`,
+        source: 'Dynamic',
+        action: 'dynamic_palette',
+        speed: clampNumber(parseFloat(scene.speed) || 0.5, 0.1, 1)
+      });
+    }
+  }
+
+  return candidates.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+function renderLoopSceneCandidateList(preferredKeys = null) {
+  const container = document.getElementById('anim-loop-scene-list');
+  if (!container) return;
+
+  const currentChecked = getCurrentLoopCheckedKeys();
+  const statusChecked = getLoopSelectionKeysFromStatus();
+  let selectedKeys = new Set();
+  if (preferredKeys instanceof Set) {
+    selectedKeys = preferredKeys;
+  } else if (currentChecked.size > 0) {
+    selectedKeys = currentChecked;
+  } else if (statusChecked.size > 0) {
+    selectedKeys = statusChecked;
+  }
+  const candidates = buildLoopSceneCandidates();
+  if (candidates.length === 0) {
+    container.innerHTML = '<p class="no-items-msg">No scenes available for looping.</p>';
+    return;
+  }
+
+  container.innerHTML = candidates.map((candidate) => {
+    const checked = selectedKeys.has(candidate.key) ? 'checked' : '';
+    const badge = candidate.sceneType === 'v2' ? `${candidate.source} · ${Math.round((candidate.speed || 0.5) * 100)}%` : candidate.source;
+    return `
+      <label class=\"anim-loop-scene-row\">
+        <input
+          type=\"checkbox\"
+          value=\"${escapeHtml(candidate.key)}\"
+          data-scene-id=\"${escapeHtml(candidate.sceneId)}\"
+          data-scene-type=\"${escapeHtml(candidate.sceneType)}\"
+          data-scene-name=\"${escapeHtml(candidate.name)}\"
+          data-scene-action=\"${escapeHtml(candidate.action || '')}\"
+          data-scene-speed=\"${candidate.speed != null ? escapeHtml(String(candidate.speed)) : ''}\"
+          ${checked}
+        >
+        <span class=\"anim-loop-scene-name\" title=\"${escapeHtml(candidate.name)}\">${escapeHtml(candidate.name)}</span>
+        <span class=\"anim-loop-scene-badge\">${escapeHtml(badge)}</span>
+      </label>
+    `;
+  }).join('');
+}
+
+function collectLoopPlaylistFromUi() {
+  const inputs = Array.from(document.querySelectorAll('#anim-loop-scene-list input[type=\"checkbox\"]:checked'));
+  return inputs.map((input) => {
+    const sceneType = input.dataset.sceneType === 'v2' ? 'v2' : 'v1';
+    const entry = {
+      sceneId: String(input.dataset.sceneId || '').trim(),
+      sceneType,
+      name: String(input.dataset.sceneName || '').trim() || null
+    };
+    if (sceneType === 'v2') {
+      entry.action = input.dataset.sceneAction === 'active' ? 'active' : 'dynamic_palette';
+      entry.speed = clampNumber(parseFloat(input.dataset.sceneSpeed) || 0.5, 0.1, 1);
+    }
+    return entry;
+  }).filter((entry) => entry.sceneId);
+}
+
+function getLoopPayloadFromUi() {
+  const dwellSelect = document.getElementById('anim-loop-dwell-ms');
+  const modeSelect = document.getElementById('anim-loop-mode');
+  return {
+    playlist: collectLoopPlaylistFromUi(),
+    dwellMs: parseInt(dwellSelect?.value || '8000', 10) || 8000,
+    mode: modeSelect?.value === 'shuffle' ? 'shuffle' : 'sequential'
+  };
+}
+
+function renderRoomLoopStatusText(loop, fallbackText = null) {
+  const statusEl = document.getElementById('anim-loop-status');
+  if (!statusEl) return;
+  if (!loop) {
+    statusEl.textContent = fallbackText || 'Loop status unavailable.';
+    statusEl.classList.remove('running', 'error');
+    return;
+  }
+
+  const dwellSec = Math.round((Number(loop.dwellMs) || 8000) / 1000);
+  const baseText = loop.isRunning
+    ? `Running: ${Array.isArray(loop.playlist) ? loop.playlist.length : 0} scenes • every ${dwellSec}s • ${loop.mode}`
+    : loop.isConfigured
+      ? `Stopped: ${Array.isArray(loop.playlist) ? loop.playlist.length : 0} scenes configured • ${loop.mode}`
+      : 'No loop configured';
+  statusEl.textContent = loop.lastError ? `${baseText} • Last error: ${loop.lastError}` : baseText;
+  statusEl.classList.toggle('running', !!loop.isRunning);
+  statusEl.classList.toggle('error', !!loop.lastError);
+}
+
+async function refreshRoomLoopStatus({ silent = false } = {}) {
+  const dwellSelect = document.getElementById('anim-loop-dwell-ms');
+  const modeSelect = document.getElementById('anim-loop-mode');
+  try {
+    const res = await fetch(`/api/rooms/${roomId}/loops/status`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to fetch loop status');
+    roomLoopStatus = data.loop || null;
+
+    if (roomLoopStatus) {
+      if (dwellSelect) dwellSelect.value = String(roomLoopStatus.dwellMs || 8000);
+      if (modeSelect) modeSelect.value = roomLoopStatus.mode === 'shuffle' ? 'shuffle' : 'sequential';
+    }
+    renderLoopSceneCandidateList(getLoopSelectionKeysFromStatus());
+    renderRoomLoopStatusText(roomLoopStatus);
+  } catch (error) {
+    if (!silent) {
+      renderRoomLoopStatusText(roomLoopStatus, `Loop status error: ${error.message}`);
+    }
+  }
 }
 
 function renderDynamicSceneCard(scene) {
@@ -2572,27 +2746,32 @@ function renderEffectChips() {
 async function initAnimationSection() {
   // Fetch v2 room info — if bridge doesn't support v2 hide the section gracefully
   const animSection = document.getElementById('anim-section');
+  const effectsRow = animSection?.querySelector('#anim-room-effects');
+  const dynamicBuilder = animSection?.querySelector('.anim-builder');
   try {
     const res = await fetch(`/api/v2/rooms/${roomId}/info`);
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'v2 not available');
     v2RoomInfo = { roomV2Id: data.roomV2Id, groupedLightId: data.groupedLightId, lightIdMap: data.lightIdMap };
+    v2AnimationsAvailable = true;
   } catch (err) {
+    v2RoomInfo = null;
+    v2AnimationsAvailable = false;
     console.warn('Hue v2 API not available for this room:', err.message);
     if (animSection) {
-      animSection.querySelector('p.anim-section-hint').textContent = `Animation effects unavailable: ${err.message}`;
-      animSection.querySelector('#anim-room-effects').style.display = 'none';
-      animSection.querySelector('.anim-builder').style.display = 'none';
+      animSection.querySelector('p.anim-section-hint').textContent = `Hue v2 dynamic effects unavailable: ${err.message}. Scene loop playlists for regular scenes are still available.`;
+      if (effectsRow) effectsRow.style.display = 'none';
+      if (dynamicBuilder) dynamicBuilder.style.display = 'none';
     }
-    return;
   }
 
-  renderEffectChips();
-  renderDynamicScenesList();
+  if (v2AnimationsAvailable) {
+    renderEffectChips();
+    renderDynamicScenesList();
+  }
 
   // Effect chip clicks — apply effect to whole room
-  const effectsRow = document.getElementById('anim-room-effects');
-  effectsRow.addEventListener('click', async (e) => {
+  effectsRow?.addEventListener('click', async (e) => {
     const btn = e.target.closest('.anim-effect-chip');
     if (!btn) return;
     const effect = btn.dataset.effect;
@@ -2620,7 +2799,7 @@ async function initAnimationSection() {
 
   // Dynamic scene list — play / stop / delete
   const scenesList = document.getElementById('anim-dynamic-scenes-list');
-  scenesList.addEventListener('click', async (e) => {
+  scenesList?.addEventListener('click', async (e) => {
     // Play — starts looping animation on bridge; stays in "Looping" state until stopped
     const playBtn = e.target.closest('.anim-play-btn');
     if (playBtn) {
@@ -2704,6 +2883,100 @@ async function initAnimationSection() {
       }
     }
   });
+
+  const loopSaveBtn = document.getElementById('anim-loop-save-btn');
+  const loopStartBtn = document.getElementById('anim-loop-start-btn');
+  const loopStopBtn = document.getElementById('anim-loop-stop-btn');
+
+  loopSaveBtn?.addEventListener('click', async () => {
+    const payload = getLoopPayloadFromUi();
+    if (!Array.isArray(payload.playlist) || payload.playlist.length === 0) {
+      alert('Select at least one scene for the loop playlist.');
+      return;
+    }
+    loopSaveBtn.disabled = true;
+    const originalLabel = loopSaveBtn.textContent;
+    loopSaveBtn.textContent = 'Saving...';
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/loops`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to save loop');
+      roomLoopStatus = data.loop || roomLoopStatus;
+      renderRoomLoopStatusText(roomLoopStatus);
+      renderLoopSceneCandidateList(getLoopSelectionKeysFromStatus());
+      loopSaveBtn.textContent = 'Saved';
+    } catch (error) {
+      loopSaveBtn.textContent = 'Error';
+      alert(`Could not save loop playlist: ${error.message}`);
+    } finally {
+      setTimeout(() => {
+        loopSaveBtn.textContent = originalLabel;
+        loopSaveBtn.disabled = false;
+      }, 900);
+    }
+  });
+
+  loopStartBtn?.addEventListener('click', async () => {
+    const payload = getLoopPayloadFromUi();
+    if (!Array.isArray(payload.playlist) || payload.playlist.length === 0) {
+      alert('Select at least one scene to start the loop.');
+      return;
+    }
+    loopStartBtn.disabled = true;
+    const originalLabel = loopStartBtn.textContent;
+    loopStartBtn.textContent = 'Starting...';
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/loops/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to start loop');
+      roomLoopStatus = data.loop || roomLoopStatus;
+      renderRoomLoopStatusText(roomLoopStatus);
+      renderLoopSceneCandidateList(getLoopSelectionKeysFromStatus());
+      loopStartBtn.textContent = 'Running';
+    } catch (error) {
+      loopStartBtn.textContent = 'Error';
+      alert(`Could not start loop: ${error.message}`);
+    } finally {
+      setTimeout(() => {
+        loopStartBtn.textContent = originalLabel;
+        loopStartBtn.disabled = false;
+      }, 900);
+    }
+  });
+
+  loopStopBtn?.addEventListener('click', async () => {
+    loopStopBtn.disabled = true;
+    const originalLabel = loopStopBtn.textContent;
+    loopStopBtn.textContent = 'Stopping...';
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/loops/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to stop loop');
+      roomLoopStatus = data.loop || roomLoopStatus;
+      renderRoomLoopStatusText(roomLoopStatus);
+    } catch (error) {
+      loopStopBtn.textContent = 'Error';
+      alert(`Could not stop loop: ${error.message}`);
+    } finally {
+      setTimeout(() => {
+        loopStopBtn.textContent = originalLabel;
+        loopStopBtn.disabled = false;
+      }, 900);
+    }
+  });
+
+  refreshRoomLoopStatus({ silent: false });
 }
 
 // ── Animation builder modal ────────────────────────────────────────

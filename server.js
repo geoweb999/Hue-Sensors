@@ -10,6 +10,7 @@ import { initializeDatabase } from './src/database.js';
 import { logger } from './src/logger.js';
 import { startHueEventStream } from './src/hueEventStream.js';
 import { accessorySnapshotService } from './src/accessorySnapshotService.js';
+import { sceneLoopService } from './src/sceneLoopService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -98,6 +99,7 @@ async function startServer() {
 
     // 2. Connect dataStore to database
     dataStore.setDatabase(database);
+    sceneLoopService.setDatabase(database);
 
     // 3. Load historical data from database
     logger.info('DATASTORE_LOAD_START', 'Loading historical data from database');
@@ -129,6 +131,9 @@ async function startServer() {
 
       // 6. Start polling
       startPolling();
+
+      // 6b. Start server-owned room scene loops
+      sceneLoopService.start();
 
       // 7. Start Hue bridge event stream
       if (config.EVENT_STREAM_ENABLED) {
@@ -165,6 +170,9 @@ function shutdown(signal = 'unknown') {
 
   // Stop accessory snapshot refresher
   accessorySnapshotService.stop();
+
+  // Stop scene loop timers
+  sceneLoopService.stop();
 
   // Close database connection
   if (database) {
