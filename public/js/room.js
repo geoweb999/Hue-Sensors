@@ -1522,6 +1522,12 @@ function upsertDynamicSceneStorage(sceneId, name, palette, speed, choreography =
   saveAnimScenes(roomId, scenes);
 }
 
+function removeDynamicSceneStorage(sceneId) {
+  if (!roomId || !sceneId) return;
+  const scenes = loadAnimScenes(roomId).filter((scene) => scene.sceneId !== sceneId);
+  saveAnimScenes(roomId, scenes);
+}
+
 function makeSurpriseSwatchRow(hex = '#ffffff', brightness = 75) {
   const row = document.createElement('div');
   row.className = 'anim-frame-row';
@@ -2116,40 +2122,31 @@ function initSceneControls() {
     btn.disabled = true;
     btn.textContent = 'Animating...';
     try {
-      let animationSceneId = storedMeta?.animationSceneId || null;
-      let reusedExistingAnimation = false;
-
-      if (animationSceneId) {
-        const recallRes = await fetch(`/api/v2/scenes/${animationSceneId}/recall`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'dynamic_palette', speed })
-        });
-        const recallData = await recallRes.json();
-        if (recallData.success) {
-          reusedExistingAnimation = true;
-        } else {
-          animationSceneId = null;
+      const previousAnimationSceneId = storedMeta?.animationSceneId || null;
+      if (previousAnimationSceneId) {
+        await fetch(`/api/v2/scenes/${previousAnimationSceneId}`, { method: 'DELETE' }).catch(() => {});
+        removeDynamicSceneStorage(previousAnimationSceneId);
+        if (activeDynamicSceneId === previousAnimationSceneId) {
+          activeDynamicSceneId = null;
         }
+        setSurpriseAnimatingByAnimationScene(previousAnimationSceneId, false, false);
       }
 
-      if (!reusedExistingAnimation) {
-        const createRes = await fetch(`/api/v2/rooms/${roomId}/dynamic-scene`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: animationName,
-            palette: animatedPalette,
-            speed,
-            choreography
-          })
-        });
-        const createData = await createRes.json();
-        if (!createData.success) {
-          throw new Error(createData.error || createData.errors?.[0]?.description || 'Failed to animate surprise');
-        }
-        animationSceneId = createData.sceneId;
+      const createRes = await fetch(`/api/v2/rooms/${roomId}/dynamic-scene`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: animationName,
+          palette: animatedPalette,
+          speed,
+          choreography
+        })
+      });
+      const createData = await createRes.json();
+      if (!createData.success) {
+        throw new Error(createData.error || createData.errors?.[0]?.description || 'Failed to animate surprise');
       }
+      const animationSceneId = createData.sceneId;
 
       const nextMeta = {
         sceneName: storedMeta?.sceneName || surpriseScene.name,
