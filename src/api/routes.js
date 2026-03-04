@@ -202,6 +202,37 @@ function buildChoreographyPositions(lightCount, mode) {
   return positions;
 }
 
+function mapPositionToPaletteIndex(position, paletteSize) {
+  if (paletteSize <= 1) return 0;
+  const t = clamp(Number.isFinite(position) ? position : 0, 0, 1);
+  return Math.round(t * (paletteSize - 1));
+}
+
+function buildChoreographyPalette(basePalette, mode, softness, lightCount) {
+  const palette = Array.isArray(basePalette) ? basePalette : [];
+  if (palette.length <= 1) return palette.slice();
+
+  const targetSize = clamp(Math.max(palette.length, Math.min(lightCount, 10)), 2, 12);
+  const positions = buildChoreographyPositions(targetSize, mode);
+  const generated = positions.map((position) => sampleGradientSwatch(palette, position, softness));
+
+  // Keep deterministic order while removing exact duplicates.
+  const deduped = [];
+  const seen = new Set();
+  for (const swatch of generated) {
+    const key = `${String(swatch.hex || '').toLowerCase()}|${clamp(Number(swatch.brightness) || 80, 1, 100)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push({
+      hex: swatch.hex,
+      brightness: clamp(Number(swatch.brightness) || 80, 1, 100)
+    });
+  }
+
+  if (deduped.length >= 2) return deduped;
+  return palette.slice(0, 2);
+}
+
 function hueWrap(hue) {
   const wrapped = hue % 360;
   return wrapped < 0 ? wrapped + 360 : wrapped;
@@ -1636,15 +1667,6 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
     const { roomV2Id, lightIdMap, lightCapMap } = await resolveV2Ids(groupId);
     const choreographyConfig = normalizeChoreography(choreography);
 
-    // Convert hex + brightness into v2 palette format
-    const v2Palette = palette.map(({ hex, brightness = 80 }) => ({
-      color: { xy: hexToXy(hex) },
-      dimming: { brightness: Math.max(1, Math.min(100, brightness)) }
-    }));
-
-    // Build actions array — required by SceneServicePost schema.
-    // Assign each light a gradient-sampled swatch according to choreography.
-    // Only include dimming/color for lights that support them (on/off-only plugs support neither).
     const lightV2Ids = Object.entries(lightIdMap)
       .sort(([a], [b]) => compareNumericIds(a, b))
       .map(([, v2LightId]) => v2LightId)
@@ -1652,11 +1674,33 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
     if (lightV2Ids.length === 0) {
       return res.status(400).json({ success: false, error: 'Room has no lights for choreography' });
     }
+
+    // Build a choreography-aware palette first, then ensure actions use colors from this
+    // same palette so dynamic scenes keep looping on the bridge.
+    const effectivePalette = buildChoreographyPalette(
+      palette,
+      choreographyConfig.mode,
+      choreographyConfig.softness,
+      lightV2Ids.length
+    );
+
+    // Convert hex + brightness into v2 palette format
+    const v2Palette = effectivePalette.map(({ hex, brightness = 80 }) => ({
+      color: { xy: hexToXy(hex) },
+      dimming: { brightness: Math.max(1, Math.min(100, brightness)) }
+    }));
+
+    // Build actions array — required by SceneServicePost schema.
+    // Assign each light a gradient-sampled swatch according to choreography.
+    // Only include dimming/color for lights that support them (on/off-only plugs support neither).
     const positions = buildChoreographyPositions(lightV2Ids.length, choreographyConfig.mode);
-    const actionSwatches = positions.map((position) => sampleGradientSwatch(palette, position, choreographyConfig.softness));
+    const actionSwatches = positions.map((position) => {
+      const paletteIndex = mapPositionToPaletteIndex(position, effectivePalette.length);
+      return effectivePalette[paletteIndex] || effectivePalette[0];
+    });
 
     const actions = lightV2Ids.map((lightId, i) => {
-      const swatch = actionSwatches[i] || palette[i % palette.length] || { hex: '#ffffff', brightness: 80 };
+      const swatch = actionSwatches[i] || effectivePalette[i % effectivePalette.length] || { hex: '#ffffff', brightness: 80 };
       const caps = lightCapMap[lightId] || {};
       const action = { on: { on: true } };
       if (caps.hasDimming) action.dimming = { brightness: clamp(Number(swatch.brightness) || 80, 1, 100) };
