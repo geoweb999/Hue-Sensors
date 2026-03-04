@@ -13,6 +13,8 @@ let roomColorWheel = null;
 let surpriseStyles = [];
 let editingSurpriseScene = null;
 const SURPRISE_DEFAULT_ANIMATION_SPEED = 0.5;
+const DEFAULT_CHOREOGRAPHY_MODE = 'left_to_right';
+const DEFAULT_CHOREOGRAPHY_SOFTNESS = 65;
 let surprisePreviewTimeout = null;
 
 const SURPRISE_PALETTE_LIBRARY_KEY = 'hueSurprisePaletteLibrary';
@@ -32,6 +34,13 @@ const ROOM_OPS_MODE_DESCRIPTIONS = {
 };
 const ROOM_OPS_MODE_STORAGE_KEY = 'roomOpsMode';
 let currentRoomOpsMode = 'timeline';
+
+const CHOREOGRAPHY_MODE_LABELS = {
+  left_to_right: 'Left → Right',
+  right_to_left: 'Right → Left',
+  center_out: 'Center Out',
+  edges_in: 'Edges In'
+};
 
 function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -1348,6 +1357,45 @@ function getSelectedSurpriseAnimationPattern() {
   return 'rotate';
 }
 
+function normalizeChoreographyMode(mode) {
+  const value = String(mode || '').trim().toLowerCase();
+  if (value === 'right_to_left') return 'right_to_left';
+  if (value === 'center_out' || value === 'radial') return 'center_out';
+  if (value === 'edges_in') return 'edges_in';
+  return DEFAULT_CHOREOGRAPHY_MODE;
+}
+
+function normalizeChoreographySoftness(softness) {
+  const parsed = Number.parseInt(softness, 10);
+  const value = Number.isFinite(parsed) ? parsed : DEFAULT_CHOREOGRAPHY_SOFTNESS;
+  return clampNumber(value, 0, 100);
+}
+
+function normalizeChoreographyConfig(choreography) {
+  return {
+    mode: normalizeChoreographyMode(choreography?.mode),
+    softness: normalizeChoreographySoftness(choreography?.softness)
+  };
+}
+
+function choreographyModeLabel(mode) {
+  return CHOREOGRAPHY_MODE_LABELS[normalizeChoreographyMode(mode)] || CHOREOGRAPHY_MODE_LABELS[DEFAULT_CHOREOGRAPHY_MODE];
+}
+
+function updateSoftnessLabel(labelEl, softness) {
+  if (!labelEl) return;
+  labelEl.textContent = `${normalizeChoreographySoftness(softness)}%`;
+}
+
+function getSelectedSurpriseChoreography() {
+  const modeSelect = document.getElementById('surprise-anim-choreography');
+  const softnessSlider = document.getElementById('surprise-anim-softness');
+  return normalizeChoreographyConfig({
+    mode: modeSelect?.value,
+    softness: softnessSlider?.value
+  });
+}
+
 function shuffleArray(input) {
   const arr = input.slice();
   for (let i = arr.length - 1; i > 0; i -= 1) {
@@ -1381,14 +1429,15 @@ function rotatePalette(palette, offset = 0) {
   return palette.slice(normalized).concat(palette.slice(0, normalized));
 }
 
-function upsertDynamicSceneStorage(sceneId, name, palette, speed) {
+function upsertDynamicSceneStorage(sceneId, name, palette, speed, choreography = null) {
   if (!roomId || !sceneId) return;
   const scenes = loadAnimScenes(roomId);
   const entry = {
     sceneId,
     name,
     palette: Array.isArray(palette) ? palette : [],
-    speed: clampNumber(parseFloat(speed) || SURPRISE_DEFAULT_ANIMATION_SPEED, 0.1, 1)
+    speed: clampNumber(parseFloat(speed) || SURPRISE_DEFAULT_ANIMATION_SPEED, 0.1, 1),
+    choreography: normalizeChoreographyConfig(choreography)
   };
   const existingIndex = scenes.findIndex((scene) => scene.sceneId === sceneId);
   if (existingIndex >= 0) {
@@ -1883,6 +1932,9 @@ function initSceneControls() {
   const surpriseSpeedSelect = document.getElementById('surprise-speed-select');
   const surpriseDirectionSelect = document.getElementById('surprise-anim-direction');
   const surprisePatternSelect = document.getElementById('surprise-anim-pattern');
+  const surpriseChoreoSelect = document.getElementById('surprise-anim-choreography');
+  const surpriseSoftnessSlider = document.getElementById('surprise-anim-softness');
+  const surpriseSoftnessLabel = document.getElementById('surprise-anim-softness-label');
   const surpriseBtn = document.getElementById('surprise-scene-btn');
 
   // Activate scene
@@ -1983,6 +2035,7 @@ function initSceneControls() {
     const pattern = getSelectedSurpriseAnimationPattern();
     const animatedPalette = applyAnimationPattern(basePalette, direction, pattern);
     const speed = getSelectedSurpriseAnimationSpeed();
+    const choreography = getSelectedSurpriseChoreography();
     const animationName = `${surpriseScene.name} Animation`.slice(0, 32);
 
     btn.disabled = true;
@@ -2012,7 +2065,8 @@ function initSceneControls() {
           body: JSON.stringify({
             name: animationName,
             palette: animatedPalette,
-            speed
+            speed,
+            choreography
           })
         });
         const createData = await createRes.json();
@@ -2032,14 +2086,15 @@ function initSceneControls() {
         animationOptions: {
           speed,
           direction,
-          pattern
+          pattern,
+          choreography
         },
         updatedAt: Date.now()
       };
       meta[surpriseScene.id] = nextMeta;
       saveSurpriseSceneMeta(roomId, meta);
 
-      upsertDynamicSceneStorage(animationSceneId, animationName, animatedPalette, speed);
+      upsertDynamicSceneStorage(animationSceneId, animationName, animatedPalette, speed, choreography);
       activeDynamicSceneId = animationSceneId;
       setSurpriseAnimatingByAnimationScene(animationSceneId, true);
       renderDynamicScenesList();
@@ -2299,6 +2354,16 @@ function initSceneControls() {
   if (surprisePatternSelect && !surprisePatternSelect.value) {
     surprisePatternSelect.value = 'rotate';
   }
+  if (surpriseChoreoSelect && !surpriseChoreoSelect.value) {
+    surpriseChoreoSelect.value = DEFAULT_CHOREOGRAPHY_MODE;
+  }
+  if (surpriseSoftnessSlider) {
+    surpriseSoftnessSlider.value = String(normalizeChoreographySoftness(surpriseSoftnessSlider.value));
+    updateSoftnessLabel(surpriseSoftnessLabel, surpriseSoftnessSlider.value);
+    surpriseSoftnessSlider.addEventListener('input', () => {
+      updateSoftnessLabel(surpriseSoftnessLabel, surpriseSoftnessSlider.value);
+    });
+  }
 
   if (surpriseBtn) {
     surpriseBtn.addEventListener('click', async () => {
@@ -2381,11 +2446,14 @@ function saveAnimScenes(rid, scenes) {
 function renderDynamicSceneCard(scene) {
   const speed = Math.round((scene.speed || 0.5) * 100);
   const isPlaying = activeDynamicSceneId === scene.sceneId;
+  const choreography = normalizeChoreographyConfig(scene.choreography);
+  const choreographyBadge = `${choreographyModeLabel(choreography.mode)} · ${choreography.softness}%`;
   return `
     <div class="anim-scene-card${isPlaying ? ' is-playing' : ''}" data-scene-id="${escapeHtml(scene.sceneId)}">
       <div class="anim-scene-info">
         <span class="anim-scene-name">${escapeHtml(scene.name)}</span>
         <span class="anim-scene-speed-badge">${speedLabel(speed)}</span>
+        <span class="anim-scene-speed-badge">${escapeHtml(choreographyBadge)}</span>
       </div>
       <div class="anim-scene-palette">
         ${(scene.palette || []).map(p => `<span class="anim-palette-dot" style="background:${escapeHtml(p.hex)}"></span>`).join('')}
@@ -2603,6 +2671,9 @@ function openAnimModal(scene = null) {
   const framesList = document.getElementById('anim-frames-list');
   const speedSlider = document.getElementById('anim-speed-slider');
   const speedLabelEl = document.getElementById('anim-speed-label');
+  const choreoModeSelect = document.getElementById('anim-choreo-mode');
+  const choreoSoftnessSlider = document.getElementById('anim-choreo-softness');
+  const choreoSoftnessLabel = document.getElementById('anim-choreo-softness-label');
 
   framesList.innerHTML = '';
 
@@ -2612,6 +2683,10 @@ function openAnimModal(scene = null) {
     const speedVal = Math.round((scene.speed || 0.5) * 100);
     speedSlider.value = speedVal;
     speedLabelEl.textContent = speedLabel(speedVal);
+    const choreography = normalizeChoreographyConfig(scene.choreography);
+    if (choreoModeSelect) choreoModeSelect.value = choreography.mode;
+    if (choreoSoftnessSlider) choreoSoftnessSlider.value = String(choreography.softness);
+    updateSoftnessLabel(choreoSoftnessLabel, choreography.softness);
     (scene.palette || []).forEach(p => framesList.appendChild(makeFrameRow(p.hex, p.brightness || 80)));
     editingSceneIndex = loadAnimScenes(roomId).findIndex(s => s.sceneId === scene.sceneId);
   } else {
@@ -2619,6 +2694,9 @@ function openAnimModal(scene = null) {
     nameInput.value = '';
     speedSlider.value = 40;
     speedLabelEl.textContent = speedLabel(40);
+    if (choreoModeSelect) choreoModeSelect.value = DEFAULT_CHOREOGRAPHY_MODE;
+    if (choreoSoftnessSlider) choreoSoftnessSlider.value = String(DEFAULT_CHOREOGRAPHY_SOFTNESS);
+    updateSoftnessLabel(choreoSoftnessLabel, DEFAULT_CHOREOGRAPHY_SOFTNESS);
     DEFAULT_FRAME_COLORS.forEach(hex => framesList.appendChild(makeFrameRow(hex)));
     editingSceneIndex = -1;
   }
@@ -2639,6 +2717,9 @@ function initAnimBuilderModal() {
   const addFrameBtn = document.getElementById('anim-add-frame-btn');
   const speedSlider = document.getElementById('anim-speed-slider');
   const speedLabelEl = document.getElementById('anim-speed-label');
+  const choreoModeSelect = document.getElementById('anim-choreo-mode');
+  const choreoSoftnessSlider = document.getElementById('anim-choreo-softness');
+  const choreoSoftnessLabel = document.getElementById('anim-choreo-softness-label');
   const saveBtn = document.getElementById('anim-save-btn');
   const newSceneBtn = document.getElementById('anim-new-scene-btn');
 
@@ -2657,6 +2738,13 @@ function initAnimBuilderModal() {
   speedSlider.addEventListener('input', () => {
     speedLabelEl.textContent = speedLabel(parseInt(speedSlider.value));
   });
+  if (choreoSoftnessSlider) {
+    choreoSoftnessSlider.value = String(normalizeChoreographySoftness(choreoSoftnessSlider.value));
+    updateSoftnessLabel(choreoSoftnessLabel, choreoSoftnessSlider.value);
+    choreoSoftnessSlider.addEventListener('input', () => {
+      updateSoftnessLabel(choreoSoftnessLabel, choreoSoftnessSlider.value);
+    });
+  }
 
   // Add frame
   addFrameBtn.addEventListener('click', () => {
@@ -2678,6 +2766,10 @@ function initAnimBuilderModal() {
       brightness: parseInt(row.querySelector('.anim-frame-bri').value)
     }));
     const speed = parseInt(document.getElementById('anim-speed-slider').value) / 100;
+    const choreography = normalizeChoreographyConfig({
+      mode: choreoModeSelect?.value,
+      softness: choreoSoftnessSlider?.value
+    });
 
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving...';
@@ -2694,14 +2786,14 @@ function initAnimBuilderModal() {
       const res = await fetch(`/api/v2/rooms/${roomId}/dynamic-scene`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, palette, speed })
+        body: JSON.stringify({ name, palette, speed, choreography })
       });
       const data = await res.json();
       if (!data.success) throw new Error((data.errors?.[0]?.description) || data.error || 'Failed');
 
       // Persist to localStorage
       const scenes = loadAnimScenes(roomId);
-      const sceneEntry = { sceneId: data.sceneId, name, palette, speed };
+      const sceneEntry = { sceneId: data.sceneId, name, palette, speed, choreography };
       if (editingSceneIndex >= 0) {
         scenes[editingSceneIndex] = sceneEntry;
       } else {

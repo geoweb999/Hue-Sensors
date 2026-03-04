@@ -105,6 +105,16 @@
             <option value="bounce">Pattern: Bounce</option>
             <option value="random">Pattern: Random</option>
           </select>
+          <select id="surprise-anim-choreography" class="surprise-speed-select" aria-label="Choose surprise choreography mode">
+            <option value="left_to_right" selected>Choreo: Left → Right</option>
+            <option value="right_to_left">Choreo: Right → Left</option>
+            <option value="center_out">Choreo: Center Out</option>
+            <option value="edges_in">Choreo: Edges In</option>
+          </select>
+          <label class="surprise-mini-field">Softness
+            <input id="surprise-anim-softness" type="range" min="0" max="100" value="65">
+            <span id="surprise-anim-softness-label">65%</span>
+          </label>
           <button id="surprise-scene-btn" class="surprise-scene-btn">Create Surprise</button>
         </div>
         <div id="surprise-style-preview" class="surprise-style-preview"></div>
@@ -165,6 +175,22 @@
       <div class="anim-modal-field">
         <label for="anim-speed-slider">Animation speed: <span id="anim-speed-label">Medium</span></label>
         <input type="range" id="anim-speed-slider" class="anim-speed-slider" min="0" max="100" value="40">
+      </div>
+
+      <div class="anim-modal-field">
+        <label for="anim-choreo-mode">Gradient choreography</label>
+        <div class="surprise-inline-controls">
+          <select id="anim-choreo-mode" class="surprise-style-select" aria-label="Choose choreography mode">
+            <option value="left_to_right" selected>Left → Right</option>
+            <option value="right_to_left">Right → Left</option>
+            <option value="center_out">Center Out</option>
+            <option value="edges_in">Edges In</option>
+          </select>
+          <label class="surprise-mini-field">Softness
+            <input id="anim-choreo-softness" type="range" min="0" max="100" value="65">
+            <span id="anim-choreo-softness-label">65%</span>
+          </label>
+        </div>
       </div>
 
       <div class="modal-buttons">

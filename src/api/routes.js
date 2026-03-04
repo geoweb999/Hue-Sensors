@@ -84,6 +84,124 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+const CHOREOGRAPHY_MODES = new Set(['left_to_right', 'right_to_left', 'center_out', 'edges_in']);
+
+function compareNumericIds(a, b) {
+  const aNum = Number(a);
+  const bNum = Number(b);
+  const aIsNum = Number.isFinite(aNum);
+  const bIsNum = Number.isFinite(bNum);
+  if (aIsNum && bIsNum && aNum !== bNum) return aNum - bNum;
+  return String(a).localeCompare(String(b));
+}
+
+function parseHexColor(hex) {
+  const normalized = String(hex || '').trim().toLowerCase();
+  const match = /^#?([a-f0-9]{6})$/.exec(normalized);
+  if (!match) return null;
+  const value = match[1];
+  return {
+    r: parseInt(value.slice(0, 2), 16),
+    g: parseInt(value.slice(2, 4), 16),
+    b: parseInt(value.slice(4, 6), 16)
+  };
+}
+
+function rgbToHex(r, g, b) {
+  const toHex = (channel) => clamp(Math.round(channel), 0, 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function mixHexColors(hexA, hexB, t) {
+  const rgbA = parseHexColor(hexA) || { r: 255, g: 255, b: 255 };
+  const rgbB = parseHexColor(hexB) || rgbA;
+  const blend = clamp(Number.isFinite(t) ? t : 0, 0, 1);
+  return rgbToHex(
+    rgbA.r + (rgbB.r - rgbA.r) * blend,
+    rgbA.g + (rgbB.g - rgbA.g) * blend,
+    rgbA.b + (rgbB.b - rgbA.b) * blend
+  );
+}
+
+function normalizeChoreography(choreography) {
+  const alias = String(choreography?.mode || '').trim().toLowerCase();
+  const aliasMap = new Map([
+    ['left-right', 'left_to_right'],
+    ['left_to_right', 'left_to_right'],
+    ['right-left', 'right_to_left'],
+    ['right_to_left', 'right_to_left'],
+    ['center-out', 'center_out'],
+    ['center_out', 'center_out'],
+    ['radial', 'center_out'],
+    ['edges-in', 'edges_in'],
+    ['edges_in', 'edges_in']
+  ]);
+  const mode = aliasMap.get(alias) || 'left_to_right';
+  const softnessRaw = Number.parseInt(choreography?.softness, 10);
+  const softness = clamp(Number.isFinite(softnessRaw) ? softnessRaw : 65, 0, 100);
+  return {
+    mode: CHOREOGRAPHY_MODES.has(mode) ? mode : 'left_to_right',
+    softness
+  };
+}
+
+function sampleGradientSwatch(palette, position, softness = 65) {
+  const swatches = Array.isArray(palette) ? palette : [];
+  if (swatches.length === 0) {
+    return { hex: '#ffffff', brightness: 80 };
+  }
+  if (swatches.length === 1) {
+    return {
+      hex: swatches[0].hex || '#ffffff',
+      brightness: clamp(Number(swatches[0].brightness) || 80, 1, 100)
+    };
+  }
+
+  const t = clamp(Number.isFinite(position) ? position : 0, 0, 1);
+  const scaled = t * (swatches.length - 1);
+  const index = Math.floor(scaled);
+  const nextIndex = Math.min(swatches.length - 1, index + 1);
+  const localT = scaled - index;
+  const smoothT = localT * localT * (3 - (2 * localT));
+  const blendWeight = clamp(softness, 0, 100) / 100;
+  const mixedT = localT * (1 - blendWeight) + smoothT * blendWeight;
+
+  const a = swatches[index];
+  const b = swatches[nextIndex];
+  return {
+    hex: mixHexColors(a?.hex, b?.hex, mixedT),
+    brightness: Math.round(
+      clamp(Number(a?.brightness) || 80, 1, 100)
+      + ((clamp(Number(b?.brightness) || 80, 1, 100) - clamp(Number(a?.brightness) || 80, 1, 100)) * mixedT)
+    )
+  };
+}
+
+function buildChoreographyPositions(lightCount, mode) {
+  if (lightCount <= 1) return [0];
+  const maxIndex = lightCount - 1;
+  const center = maxIndex / 2;
+  const maxDistance = Math.max(center, maxIndex - center) || 1;
+  const positions = [];
+
+  for (let i = 0; i < lightCount; i += 1) {
+    if (mode === 'right_to_left') {
+      positions.push(1 - (i / maxIndex));
+      continue;
+    }
+    if (mode === 'center_out') {
+      positions.push(Math.abs(i - center) / maxDistance);
+      continue;
+    }
+    if (mode === 'edges_in') {
+      positions.push(1 - (Math.abs(i - center) / maxDistance));
+      continue;
+    }
+    positions.push(i / maxIndex); // left_to_right
+  }
+  return positions;
+}
+
 function hueWrap(hue) {
   const wrapped = hue % 360;
   return wrapped < 0 ? wrapped + 360 : wrapped;
@@ -1502,11 +1620,11 @@ router.put('/v2/lights/:v2LightId/effect', async (req, res) => {
 });
 
 // POST /api/v2/rooms/:groupId/dynamic-scene - create a dynamic palette scene on the bridge
-// Body: { name: string, palette: [{hex: "#rrggbb", brightness: 0-100}], speed: 0-1 }
+// Body: { name: string, palette: [{hex: "#rrggbb", brightness: 0-100}], speed: 0-1, choreography?: { mode, softness } }
 router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
   try {
     const { groupId } = req.params;
-    const { name, palette, speed = 0.5 } = req.body;
+    const { name, palette, speed = 0.5, choreography } = req.body;
 
     if (!name || !name.trim()) {
       return res.status(400).json({ success: false, error: 'name is required' });
@@ -1516,6 +1634,7 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
     }
 
     const { roomV2Id, lightIdMap, lightCapMap } = await resolveV2Ids(groupId);
+    const choreographyConfig = normalizeChoreography(choreography);
 
     // Convert hex + brightness into v2 palette format
     const v2Palette = palette.map(({ hex, brightness = 80 }) => ({
@@ -1524,15 +1643,24 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
     }));
 
     // Build actions array — required by SceneServicePost schema.
-    // Distribute palette colors round-robin. Only include dimming/color for
-    // lights that support them (on/off-only plugs support neither).
-    const lightV2Ids = Object.values(lightIdMap);
+    // Assign each light a gradient-sampled swatch according to choreography.
+    // Only include dimming/color for lights that support them (on/off-only plugs support neither).
+    const lightV2Ids = Object.entries(lightIdMap)
+      .sort(([a], [b]) => compareNumericIds(a, b))
+      .map(([, v2LightId]) => v2LightId)
+      .filter(Boolean);
+    if (lightV2Ids.length === 0) {
+      return res.status(400).json({ success: false, error: 'Room has no lights for choreography' });
+    }
+    const positions = buildChoreographyPositions(lightV2Ids.length, choreographyConfig.mode);
+    const actionSwatches = positions.map((position) => sampleGradientSwatch(palette, position, choreographyConfig.softness));
+
     const actions = lightV2Ids.map((lightId, i) => {
-      const colorEntry = v2Palette[i % v2Palette.length];
+      const swatch = actionSwatches[i] || palette[i % palette.length] || { hex: '#ffffff', brightness: 80 };
       const caps = lightCapMap[lightId] || {};
       const action = { on: { on: true } };
-      if (caps.hasDimming) action.dimming = { brightness: colorEntry.dimming.brightness };
-      if (caps.hasColor) action.color = { xy: colorEntry.color.xy };
+      if (caps.hasDimming) action.dimming = { brightness: clamp(Number(swatch.brightness) || 80, 1, 100) };
+      if (caps.hasColor) action.color = { xy: hexToXy(swatch.hex) };
       return { target: { rid: lightId, rtype: 'light' }, action };
     });
 
@@ -1555,7 +1683,7 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
       return res.status(400).json({ success: false, error: `Scene created but failed to start animation: ${errMsg}` });
     }
 
-    res.json({ success: true, sceneId });
+    res.json({ success: true, sceneId, choreography: choreographyConfig });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

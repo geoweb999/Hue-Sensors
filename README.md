@@ -22,7 +22,7 @@ For technical handoff context aimed at coding agents (architecture, module owner
 - **Light Level Monitoring**: Displays ambient light levels in lux
 - **Lights Dashboard**: View and control all Hue lights — toggle power, adjust brightness, pick colors, and set color temperature
 - **Stable Room Accessories**: Snapshot-backed accessory endpoint for room details (motion sensors, dimmers, battery/connectivity, button events) with stale-state metadata during bridge outages
-- **Surprise Scenes**: One-click random scene generator with 10 curated swatch styles, randomized default brightness (80-100), editable color/brightness swatches, per-light assignment mode, reusable palette library, live preview toggle, and per-scene animation controls
+- **Surprise Scenes**: One-click random scene generator with 10 curated swatch styles, randomized default brightness (80-100), editable color/brightness swatches, per-light assignment mode, reusable palette library, live preview toggle, per-scene animation controls, and gradient choreography modes (left→right, right→left, center-out, edges-in) with softness control
 - **Interactive Graphs**: Auto-scaling temperature charts with motion events highlighted as green dots
 - **Smart Data Sampling**: Automatic sampling strategies (hourly/15-min/all) optimize performance for large datasets
 - **Time Range Controls**: Quick-select buttons for viewing 1-hour, 1-day, 7-day, 30-day, or auto-selected ranges
@@ -241,10 +241,24 @@ The dashboard automatically optimizes graph performance when you have accumulate
 | `/api/rooms/:groupId/surprise/custom` | POST | Edit scene colors/brightness with custom swatches and save an updated scene |
 | `/api/rooms/:groupId/surprise/preview` | POST | Preview swatches live without creating a scene |
 | `/api/scenes/:sceneId` | PUT | Edit an existing scene (rename) |
+| `/api/v2/rooms/:groupId/dynamic-scene` | POST | Create and start a Hue v2 dynamic palette scene with optional choreography `{ mode, softness }` |
 | `/api/lights` | GET | All lights grouped by room with state/color info |
 | `/api/lights/:id/state` | PUT | Control a light (on, bri, hue, sat, xy, ct, effect, alert, transitiontime) |
 | `/api/health` | GET | Health check and last poll timestamp |
 | `/api/stats` | GET | Database statistics (total readings, size, data range) |
+
+### Dynamic Scene Choreography
+
+`POST /api/v2/rooms/:groupId/dynamic-scene` accepts:
+
+- `name`: scene name
+- `palette`: array of `{ hex, brightness }` swatches
+- `speed`: animation speed (`0.1 - 1.0`)
+- `choreography` (optional):
+  - `mode`: `left_to_right` | `right_to_left` | `center_out` | `edges_in`
+  - `softness`: `0 - 100` (higher = smoother interpolation between swatches)
+
+When choreography is provided, the backend assigns per-light gradient positions using a deterministic light ordering so color placement is stable across recalls.
 
 ## Data Flow
 
@@ -517,6 +531,14 @@ MIT License - feel free to use this project for personal or commercial purposes.
 **Last Updated**: March 2026
 
 ## Changelog
+
+### Version 2.2.0 (March 2026)
+- **Gradient Choreography for Dynamic Scenes**: Added spatial choreography controls for colorful room animations
+  - New choreography modes: `Left → Right`, `Right → Left`, `Center Out`, `Edges In`
+  - New `Softness` control (`0-100`) to tune hard color steps vs. smooth blends
+  - Surprise animation actions and dynamic scene builder now both pass choreography settings to the backend
+  - Dynamic scene cards now display choreography metadata for quick at-a-glance scene identification
+  - `/api/v2/rooms/:groupId/dynamic-scene` now accepts optional `choreography` payload and applies per-light gradient sampling
 
 ### Version 2.1.0 (February 2026)
 - **Circular Color Picker**: Color-capable lights in the control modal now display a circular hue/saturation wheel for intuitive color selection alongside the existing hex input
