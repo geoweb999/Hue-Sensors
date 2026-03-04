@@ -301,8 +301,15 @@ function buildDevicesForGroup(groupId, resources) {
   for (const l of lightLevels) {
     const rid = resolveResourceDeviceRid(serviceRidToDeviceRid, l);
     if (deviceMap[rid]) {
+      // Prefer light_level_lux (v2 newer firmware); fall back to computing lux from
+      // the raw light_level value using the Hue proprietary scale formula.
+      const luxDirect = l.light?.light_level_lux ?? null;
+      const rawLevel = l.light?.light_level ?? null;
+      const luxComputed = (luxDirect == null && rawLevel != null && Number.isFinite(Number(rawLevel)))
+        ? Math.round(Math.pow(10, (Number(rawLevel) - 1) / 10000))
+        : null;
       deviceMap[rid].lightLevel = {
-        lux: l.light?.light_level_lux ?? null,
+        lux: luxDirect ?? luxComputed,
         valid: l.light?.light_level_valid ?? false
       };
     }
@@ -499,6 +506,20 @@ function buildDevicesForGroup(groupId, resources) {
   for (const entry of Object.values(deviceMap)) {
     if (Array.isArray(entry.buttons) && entry.buttons.length > 1) {
       entry.buttons.sort((a, b) => (a.controlId ?? 99) - (b.controlId ?? 99));
+    }
+  }
+
+  // When a dimmer has no button data (v2 /button and v1 sensors both unavailable on this
+  // bridge firmware), synthesize the standard Hue dimmer 4-button layout so the modal
+  // isn't blank. Control IDs 1–4 map to On / Brighter / Dimmer / Off.
+  for (const entry of Object.values(deviceMap)) {
+    if (entry.deviceKind === 'dimmer' && Array.isArray(entry.buttons) && entry.buttons.length === 0) {
+      entry.buttons = [
+        { controlId: 1, lastEvent: null, lastUpdated: null },
+        { controlId: 2, lastEvent: null, lastUpdated: null },
+        { controlId: 3, lastEvent: null, lastUpdated: null },
+        { controlId: 4, lastEvent: null, lastUpdated: null }
+      ];
     }
   }
 
