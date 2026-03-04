@@ -35,6 +35,7 @@ const ROOM_OPS_MODE_DESCRIPTIONS = {
 const ROOM_OPS_MODE_STORAGE_KEY = 'roomOpsMode';
 let currentRoomOpsMode = 'timeline';
 let sceneEditData = null;      // { sceneId, originalLights, lightstates }
+let diagOpen = false;          // Bridge Diagnostics expanded state (persists across re-renders)
 
 const CHOREOGRAPHY_MODE_LABELS = {
   left_to_right: 'Left → Right',
@@ -552,6 +553,65 @@ function initSceneEditModal() {
   });
 }
 
+// ── Collapsible Sections ──────────────────────────────────────────────────────
+
+const COLLAPSE_STORAGE_KEY = 'roomSectionCollapse';
+
+function getCollapseState() {
+  try { return JSON.parse(localStorage.getItem(COLLAPSE_STORAGE_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function saveCollapseState(state) {
+  localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(state));
+}
+
+function initCollapsibleSections() {
+  const state = getCollapseState();
+
+  // Apply default collapsed state for anim + automations if not yet set by user
+  const defaults = { 'anim-body': true, 'automations-body': true };
+
+  document.querySelectorAll('.section-collapse-btn').forEach(btn => {
+    const targetId = btn.dataset.target;
+    const body = document.getElementById(targetId);
+    if (!body) return;
+
+    // Determine initial collapsed state: stored state wins, then button's own class, then defaults
+    let collapsed;
+    if (targetId in state) {
+      collapsed = state[targetId];
+    } else {
+      collapsed = targetId in defaults ? defaults[targetId] : btn.classList.contains('section-collapse-btn--collapsed');
+    }
+
+    if (collapsed) {
+      body.classList.add('section-body--collapsed');
+      btn.setAttribute('aria-expanded', 'false');
+      btn.classList.add('section-collapse-btn--collapsed');
+    } else {
+      body.classList.remove('section-body--collapsed');
+      btn.setAttribute('aria-expanded', 'true');
+      btn.classList.remove('section-collapse-btn--collapsed');
+    }
+
+    btn.addEventListener('click', () => {
+      const isCollapsed = body.classList.contains('section-body--collapsed');
+      body.classList.toggle('section-body--collapsed', !isCollapsed);
+      btn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+      btn.classList.toggle('section-collapse-btn--collapsed', !isCollapsed);
+      const s = getCollapseState();
+      s[targetId] = !isCollapsed;
+      saveCollapseState(s);
+    });
+  });
+
+  // Close kebab menus on outside click
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.scene-kebab-wrap')) closeAllKebabMenus();
+  });
+}
+
 function initDimmerModal() {
   const modal = document.getElementById('dimmer-modal');
   if (!modal) return;
@@ -653,19 +713,26 @@ function renderSceneCard(scene, surpriseMeta = null) {
   const isSurpriseAnimating = !!(surpriseMeta && surpriseMeta[scene.id]?.isAnimating);
   const isSurprisePaused = !!(surpriseMeta && surpriseMeta[scene.id]?.isPaused);
   const animateLabel = isSurpriseAnimating ? 'Looping' : 'Animate';
+  const surpriseMenuItems = isSurprise ? `
+        <button class="scene-animate-btn kebab-item" data-scene-id="${scene.id}">${animateLabel}</button>
+        <button class="scene-pause-btn kebab-item" data-scene-id="${scene.id}" ${isSurpriseAnimating ? '' : 'disabled'}>Pause</button>
+        <button class="scene-resume-btn kebab-item" data-scene-id="${scene.id}" ${isSurprisePaused ? '' : 'disabled'}>Resume</button>
+        <button class="scene-stop-btn kebab-item" data-scene-id="${scene.id}">Stop</button>
+        <button class="scene-remix-btn kebab-item" data-scene-id="${scene.id}">Remix</button>` : '';
   return `
     <div class="scene-card${isAnimated ? ' scene-animated' : ''}" data-scene-id="${scene.id}">
       <div class="scene-card-name" title="${escapeHtml(scene.name)}">${escapeHtml(displayName)}</div>
       <div class="scene-card-actions">
-        <button class="scene-edit-btn" data-scene-id="${scene.id}" title="Edit colors and brightness">Edit</button>
-        <button class="scene-rename-btn" data-scene-id="${scene.id}" title="Rename scene">Rename</button>
-        ${isSurprise ? `<button class="scene-animate-btn" data-scene-id="${scene.id}" title="Animate surprise palette">${animateLabel}</button>` : ''}
-        ${isSurprise ? `<button class="scene-pause-btn" data-scene-id="${scene.id}" title="Pause surprise animation" ${isSurpriseAnimating ? '' : 'disabled'}>Pause</button>` : ''}
-        ${isSurprise ? `<button class="scene-resume-btn" data-scene-id="${scene.id}" title="Resume surprise animation" ${isSurprisePaused ? '' : 'disabled'}>Resume</button>` : ''}
-        ${isSurprise ? `<button class="scene-stop-btn" data-scene-id="${scene.id}" title="Stop surprise animation">Stop</button>` : ''}
-        ${isSurprise ? `<button class="scene-remix-btn" data-scene-id="${scene.id}" title="Create a modified surprise">Remix</button>` : ''}
-        <button class="scene-activate-btn" data-scene-id="${scene.id}">Activate</button>
-        ${!scene.locked ? `<button class="scene-delete-btn" data-scene-id="${scene.id}" title="Delete scene">&times;</button>` : ''}
+        <button class="scene-activate-btn scene-activate-primary" data-scene-id="${scene.id}">Activate</button>
+        <div class="scene-kebab-wrap">
+          <button class="scene-kebab-btn" data-scene-id="${scene.id}" aria-label="More options" title="More options">&#8943;</button>
+          <div class="scene-kebab-menu" role="menu">
+            <button class="scene-edit-btn kebab-item" data-scene-id="${scene.id}">Edit</button>
+            <button class="scene-rename-btn kebab-item" data-scene-id="${scene.id}">Rename</button>
+            ${surpriseMenuItems}
+            ${!scene.locked ? `<button class="scene-delete-btn kebab-item kebab-item-danger" data-scene-id="${scene.id}">Delete</button>` : ''}
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -781,6 +848,22 @@ function renderAutomations(schedules, rules) {
 function renderRoom(data) {
   document.getElementById('room-title').textContent = data.name;
   document.title = `${data.name} — Hue Dashboard`;
+
+  // Update sticky header meta
+  const onLightsCount = data.lights.filter(l => l.on && l.reachable).length;
+  const headerTemp = document.getElementById('header-temp');
+  const headerLights = document.getElementById('header-lights-status');
+  const headerAllOff = document.getElementById('header-all-off-btn');
+  if (headerTemp) {
+    const tempDev = (deviceData || []).find(d => d.temperature?.valid && Number.isFinite(d.temperature?.celsius));
+    headerTemp.textContent = tempDev ? `🌡️ ${celsiusToFahrenheit(tempDev.temperature.celsius).toFixed(1)}°F` : '';
+  }
+  if (headerLights) {
+    headerLights.textContent = `💡 ${onLightsCount}/${data.lights.length} on`;
+  }
+  if (headerAllOff) {
+    headerAllOff.hidden = false;
+  }
 
   // Room brightness bar
   const anyOn = data.lights.some(l => l.on && l.reachable);
@@ -1011,12 +1094,12 @@ function buildNowCards() {
   const staleUpdated = deviceSnapshotMeta.lastUpdated ? ` (${formatRelativeTime(deviceSnapshotMeta.lastUpdated)})` : '';
 
   return [
-    { label: 'Lights', value: `${onCount}/${lights.length} on` },
-    { label: 'Unreachable Lights', value: String(unreachableCount) },
-    { label: 'Motions Active', value: String(motionDetectedCount) },
-    { label: 'Dimmers', value: String(dimmerCount) },
-    { label: 'Temperature', value: tempDevice ? `${celsiusToFahrenheit(tempDevice.temperature.celsius).toFixed(1)}°F` : 'Unknown' },
-    { label: 'Snapshot', value: `${staleState}${staleUpdated}` }
+    { label: 'Lights', value: `${onCount}/${lights.length} on`, icon: '💡', colorClass: onCount > 0 ? 'stat-lights-on' : 'stat-lights' },
+    { label: 'Unreachable', value: String(unreachableCount), icon: '⚠️', colorClass: unreachableCount > 0 ? 'stat-warn' : 'stat-neutral' },
+    { label: 'Motion', value: String(motionDetectedCount), icon: '🏃', colorClass: motionDetectedCount > 0 ? 'stat-motion' : 'stat-neutral' },
+    { label: 'Dimmers', value: String(dimmerCount), icon: '🎛️', colorClass: 'stat-dimmers' },
+    { label: 'Temperature', value: tempDevice ? `${celsiusToFahrenheit(tempDevice.temperature.celsius).toFixed(1)}°F` : '—', icon: '🌡️', colorClass: 'stat-temp' },
+    { label: 'Snapshot', value: `${staleState}${staleUpdated}`, icon: '📡', colorClass: deviceSnapshotMeta.stale ? 'stat-stale' : 'stat-fresh' }
   ];
 }
 
@@ -1092,26 +1175,41 @@ function renderRoomLayoutShowcase() {
 
   el.innerHTML = `
     <div class="mock-nowcards">
-      ${cards.map((card) => `<article class="mock-nowcard"><span>${escapeHtml(card.label)}</span><strong>${escapeHtml(card.value)}</strong></article>`).join('')}
+      ${cards.map((card) => `
+        <article class="mock-nowcard ${escapeHtml(card.colorClass)}">
+          <span class="nowcard-icon">${card.icon}</span>
+          <span class="nowcard-label">${escapeHtml(card.label)}</span>
+          <strong class="nowcard-value">${escapeHtml(card.value)}</strong>
+        </article>`).join('')}
     </div>
     <div class="room-layout-grid two-col">
       <section class="mock-panel">
         <h3>Activity Timeline</h3>
         <ul class="mock-list">${timelineRows.map((row) => `<li>${escapeHtml(row)}</li>`).join('')}</ul>
       </section>
-      <section class="mock-panel">
-        <h3>Bridge Diagnostics</h3>
-        <ul class="mock-list">
-          <li>Snapshot status: ${deviceSnapshotMeta.stale ? 'Stale' : 'Fresh'}</li>
-          <li>Snapshot updated: ${escapeHtml(formatDateTime(deviceSnapshotMeta.lastUpdated))}</li>
-          <li>Snapshot error: ${escapeHtml(deviceSnapshotMeta.lastError || 'None')}</li>
-          <li>Accessories: ${devices.length} total (${sensorCount} sensors, ${dimmerCount} dimmers)</li>
-          <li>Connectivity: ${connectedCount} connected, ${disconnectedCount} disconnected</li>
-          <li>Battery health: ${batteryLowCount} low, ${batteryCriticalCount} critical</li>
-        </ul>
+      <section class="mock-panel mock-panel-diag">
+        <details id="bridge-diag-details"${diagOpen ? ' open' : ''}>
+          <summary class="diag-summary">
+            <span>Bridge Diagnostics</span>
+            <span class="diag-status-pill ${deviceSnapshotMeta.stale ? 'diag-stale' : 'diag-fresh'}">${deviceSnapshotMeta.stale ? 'Stale' : 'Fresh'}</span>
+          </summary>
+          <ul class="mock-list">
+            <li>Snapshot updated: ${escapeHtml(formatDateTime(deviceSnapshotMeta.lastUpdated))}</li>
+            <li>Snapshot error: ${escapeHtml(deviceSnapshotMeta.lastError || 'None')}</li>
+            <li>Accessories: ${devices.length} total (${sensorCount} sensors, ${dimmerCount} dimmers)</li>
+            <li>Connectivity: ${connectedCount} connected, ${disconnectedCount} disconnected</li>
+            <li>Battery health: ${batteryLowCount} low, ${batteryCriticalCount} critical</li>
+          </ul>
+        </details>
       </section>
     </div>
   `;
+
+  // Persist Bridge Diagnostics open/collapsed state across re-renders
+  const diagDetails = el.querySelector('#bridge-diag-details');
+  if (diagDetails) {
+    diagDetails.addEventListener('toggle', () => { diagOpen = diagDetails.open; });
+  }
 }
 
 async function activateSceneFromStudioBubble(sceneId, bubble) {
@@ -1379,9 +1477,8 @@ function initRoomBrightness() {
     setTimeout(() => { roomBriSliderActive = false; }, 600);
   });
 
-  const offBtn = document.getElementById('room-all-off-btn');
-  offBtn.addEventListener('click', async () => {
-    offBtn.disabled = true;
+  const allOffHandler = async (btn) => {
+    btn.disabled = true;
     try {
       await fetch(`/api/rooms/${roomId}/state`, {
         method: 'PUT',
@@ -1390,9 +1487,18 @@ function initRoomBrightness() {
       });
       setTimeout(fetchAndRenderRoom, 600);
     } finally {
-      offBtn.disabled = false;
+      btn.disabled = false;
     }
-  });
+  };
+
+  const offBtn = document.getElementById('room-all-off-btn');
+  offBtn.addEventListener('click', () => allOffHandler(offBtn));
+
+  // Mirror in sticky header
+  const headerOffBtn = document.getElementById('header-all-off-btn');
+  if (headerOffBtn) {
+    headerOffBtn.addEventListener('click', () => allOffHandler(headerOffBtn));
+  }
 }
 
 async function sendRoomBrightness(bri) {
@@ -2160,6 +2266,10 @@ function initSurpriseEditorModal() {
   });
 }
 
+function closeAllKebabMenus() {
+  document.querySelectorAll('.scene-kebab-wrap.kebab-open').forEach(w => w.classList.remove('kebab-open'));
+}
+
 function initSceneControls() {
   const grid = document.getElementById('scenes-grid');
   const saveBtn = document.getElementById('save-scene-btn');
@@ -2237,6 +2347,22 @@ function initSceneControls() {
       }, 1800);
       alert(`Could not edit scene: ${err.message}`);
     }
+  });
+
+  // Kebab menu toggle
+  grid.addEventListener('click', (e) => {
+    const kebabBtn = e.target.closest('.scene-kebab-btn');
+    if (!kebabBtn) return;
+    e.stopPropagation();
+    const wrap = kebabBtn.closest('.scene-kebab-wrap');
+    const isOpen = wrap.classList.contains('kebab-open');
+    closeAllKebabMenus();
+    if (!isOpen) wrap.classList.add('kebab-open');
+  });
+
+  // Close kebab on any kebab-item click
+  grid.addEventListener('click', (e) => {
+    if (e.target.closest('.kebab-item')) closeAllKebabMenus();
   });
 
   // Edit scene: surprise scenes → palette editor, standard scenes → per-light editor
@@ -3378,6 +3504,7 @@ async function init() {
   initSceneControls();
   initSurpriseEditorModal();
   initAnimBuilderModal();
+  initCollapsibleSections();
   initSceneEditModal();
   initDimmerModal();
   initRoomOpsModePicker();

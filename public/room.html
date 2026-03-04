@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
-  <header>
+  <header class="room-header">
     <div class="header-content">
       <div style="display:flex;align-items:center;gap:1rem;">
         <a href="/lights.html" class="back-btn" id="back-btn">&#8249; Lights</a>
@@ -29,11 +29,25 @@
         <span class="status-dot"></span>
         <span id="status-text">Connecting...</span>
       </div>
-      <div id="last-update">Last update: --</div>
+      <span id="header-temp" class="header-meta-item"></span>
+      <span id="header-lights-status" class="header-meta-item"></span>
+      <div class="status-bar-right">
+        <div id="last-update">Last update: --</div>
+        <button id="header-all-off-btn" class="header-all-off-btn" hidden>All Off</button>
+      </div>
     </div>
   </header>
 
   <main>
+    <!-- Section jump nav -->
+    <nav class="section-jump-nav" id="section-jump-nav" aria-label="Jump to section">
+      <a href="#lights-section" class="jump-pill" data-section="lights-section">💡 Lights</a>
+      <a href="#scenes-section" class="jump-pill" data-section="scenes-section">🎨 Scenes</a>
+      <a href="#devices-section" class="jump-pill" data-section="devices-section">📡 Devices</a>
+      <a href="#anim-section" class="jump-pill" data-section="anim-section">✨ Animations</a>
+      <a href="#automations-section" class="jump-pill" data-section="automations-section">⚡ Automations</a>
+    </nav>
+
     <section class="layout-lab room-layout-lab" aria-label="Timeline operations">
       <div class="layout-lab-title">Timeline Ops</div>
       <div class="layout-mode-group" id="room-ops-mode-group">
@@ -63,111 +77,136 @@
       <button id="room-all-off-btn" class="room-all-off-btn">All Off</button>
     </div>
 
-    <!-- Sensors & Devices section (populated via Hue API v2; hidden if unavailable) -->
+    <!-- Sensors & Devices section -->
     <div id="devices-section" class="room-section hidden">
-      <h2>Sensors &amp; Devices</h2>
-      <div id="devices-grid" class="devices-grid"></div>
+      <h2 class="section-heading">
+        Sensors &amp; Devices
+        <button class="section-collapse-btn" data-target="devices-body" aria-expanded="true" aria-label="Toggle Sensors &amp; Devices">▾</button>
+      </h2>
+      <div id="devices-body" class="section-body">
+        <div id="devices-grid" class="devices-grid"></div>
+      </div>
     </div>
 
     <!-- Lights section -->
     <div id="lights-section" class="room-section hidden">
-      <h2>Lights</h2>
-      <div id="lights-grid" class="room-lights-grid"></div>
+      <h2 class="section-heading">
+        Lights
+        <button class="section-collapse-btn" data-target="lights-body" aria-expanded="true" aria-label="Toggle Lights">▾</button>
+      </h2>
+      <div id="lights-body" class="section-body">
+        <div id="lights-grid" class="room-lights-grid"></div>
+      </div>
     </div>
 
     <!-- Scenes section -->
     <div id="scenes-section" class="room-section hidden">
-      <h2>Scenes</h2>
-      <div id="scenes-grid" class="scenes-grid"></div>
-      <div class="save-scene-form">
-        <input type="text" id="save-scene-input" class="save-scene-input" placeholder="New scene name..." maxlength="32">
-        <button id="save-scene-btn" class="save-scene-btn">Save Current</button>
-      </div>
-      <div class="surprise-scene-form">
-        <div class="surprise-scene-header">
-          <h3>Surprise Scenes</h3>
-          <p>Create a random cohesive color scene using curated swatch styles.</p>
+      <h2 class="section-heading">
+        Scenes
+        <button class="section-collapse-btn" data-target="scenes-body" aria-expanded="true" aria-label="Toggle Scenes">▾</button>
+      </h2>
+      <div id="scenes-body" class="section-body">
+        <div id="scenes-grid" class="scenes-grid"></div>
+        <div class="save-scene-form">
+          <input type="text" id="save-scene-input" class="save-scene-input" placeholder="New scene name..." maxlength="32">
+          <button id="save-scene-btn" class="save-scene-btn">Save Current</button>
         </div>
-        <div class="surprise-scene-controls">
-          <select id="surprise-style-select" class="surprise-style-select" aria-label="Choose surprise style"></select>
-          <select id="surprise-speed-select" class="surprise-speed-select" aria-label="Choose surprise animation speed">
-            <option value="0.25">Animate Slow</option>
-            <option value="0.5" selected>Animate Medium</option>
-            <option value="0.75">Animate Fast</option>
-            <option value="1">Animate Max</option>
-          </select>
-          <select id="surprise-anim-direction" class="surprise-speed-select" aria-label="Choose surprise animation direction">
-            <option value="forward" selected>Direction: Forward</option>
-            <option value="reverse">Direction: Reverse</option>
-          </select>
-          <select id="surprise-anim-pattern" class="surprise-speed-select" aria-label="Choose surprise animation pattern">
-            <option value="rotate" selected>Pattern: Rotate</option>
-            <option value="bounce">Pattern: Bounce</option>
-            <option value="random">Pattern: Random</option>
-          </select>
-          <select id="surprise-anim-choreography" class="surprise-speed-select" aria-label="Choose surprise choreography mode">
-            <option value="left_to_right" selected>Choreo: Left → Right</option>
-            <option value="right_to_left">Choreo: Right → Left</option>
-            <option value="center_out">Choreo: Center Out</option>
-            <option value="edges_in">Choreo: Edges In</option>
-          </select>
-          <label class="surprise-mini-field">Softness
-            <input id="surprise-anim-softness" type="range" min="0" max="100" value="65">
-            <span id="surprise-anim-softness-label">65%</span>
-          </label>
-          <button id="surprise-scene-btn" class="surprise-scene-btn">Create Surprise</button>
+        <div class="surprise-scene-form">
+          <div class="surprise-scene-header">
+            <h3>Surprise Scenes</h3>
+            <p>Create a random cohesive color scene using curated swatch styles.</p>
+          </div>
+          <div class="surprise-scene-controls">
+            <select id="surprise-style-select" class="surprise-style-select" aria-label="Choose surprise style"></select>
+            <select id="surprise-speed-select" class="surprise-speed-select" aria-label="Choose surprise animation speed">
+              <option value="0.25">Animate Slow</option>
+              <option value="0.5" selected>Animate Medium</option>
+              <option value="0.75">Animate Fast</option>
+              <option value="1">Animate Max</option>
+            </select>
+            <select id="surprise-anim-direction" class="surprise-speed-select" aria-label="Choose surprise animation direction">
+              <option value="forward" selected>Direction: Forward</option>
+              <option value="reverse">Direction: Reverse</option>
+            </select>
+            <select id="surprise-anim-pattern" class="surprise-speed-select" aria-label="Choose surprise animation pattern">
+              <option value="rotate" selected>Pattern: Rotate</option>
+              <option value="bounce">Pattern: Bounce</option>
+              <option value="random">Pattern: Random</option>
+            </select>
+            <select id="surprise-anim-choreography" class="surprise-speed-select" aria-label="Choose surprise choreography mode">
+              <option value="left_to_right" selected>Choreo: Left → Right</option>
+              <option value="right_to_left">Choreo: Right → Left</option>
+              <option value="center_out">Choreo: Center Out</option>
+              <option value="edges_in">Choreo: Edges In</option>
+            </select>
+            <label class="surprise-mini-field">Softness
+              <input id="surprise-anim-softness" type="range" min="0" max="100" value="65">
+              <span id="surprise-anim-softness-label">65%</span>
+            </label>
+            <button id="surprise-scene-btn" class="surprise-scene-btn">Create Surprise</button>
+          </div>
+          <div id="surprise-style-preview" class="surprise-style-preview"></div>
         </div>
-        <div id="surprise-style-preview" class="surprise-style-preview"></div>
       </div>
     </div>
 
-    <!-- Animation Effects section -->
+    <!-- Animation Effects section (collapsed by default) -->
     <div id="anim-section" class="room-section hidden">
-      <h2>Animation Effects</h2>
-      <p class="anim-section-hint">Effects run on the bridge — they keep going even after you close this page.</p>
-      <div class="anim-effects-row" id="anim-room-effects">
-        <!-- effect chips rendered by room.js -->
-      </div>
-      <div class="anim-builder">
-        <h3 class="anim-builder-title">Dynamic Scenes</h3>
-        <p class="anim-section-hint">Pick a palette of colors and the bridge cycles through them continuously.</p>
-        <div id="anim-dynamic-scenes-list" class="anim-dynamic-scenes-list"></div>
-        <button id="anim-new-scene-btn" class="anim-new-scene-btn">+ New Dynamic Scene</button>
-      </div>
-      <div class="anim-loop-builder">
-        <h3 class="anim-builder-title">Scene Loop Playlist</h3>
-        <p class="anim-section-hint">Select scenes and run them in a server-side loop. Looping continues until you stop it.</p>
-        <div id="anim-loop-scene-list" class="anim-loop-scene-list"></div>
-        <div class="anim-loop-controls">
-          <label class="surprise-mini-field">Dwell
-            <select id="anim-loop-dwell-ms" class="surprise-style-select">
-              <option value="3000">3s</option>
-              <option value="5000">5s</option>
-              <option value="8000" selected>8s</option>
-              <option value="12000">12s</option>
-              <option value="20000">20s</option>
-            </select>
-          </label>
-          <label class="surprise-mini-field">Order
-            <select id="anim-loop-mode" class="surprise-style-select">
-              <option value="sequential" selected>Sequential</option>
-              <option value="shuffle">Shuffle</option>
-            </select>
-          </label>
+      <h2 class="section-heading">
+        Animation Effects
+        <button class="section-collapse-btn section-collapse-btn--collapsed" data-target="anim-body" aria-expanded="false" aria-label="Toggle Animation Effects">▾</button>
+      </h2>
+      <div id="anim-body" class="section-body section-body--collapsed">
+        <p class="anim-section-hint">Effects run on the bridge — they keep going even after you close this page.</p>
+        <div class="anim-effects-row" id="anim-room-effects">
+          <!-- effect chips rendered by room.js -->
         </div>
-        <div class="anim-loop-actions">
-          <button id="anim-loop-save-btn" class="anim-add-frame-btn">Save Playlist</button>
-          <button id="anim-loop-start-btn" class="anim-new-scene-btn">Start Loop</button>
-          <button id="anim-loop-stop-btn" class="btn-ghost">Stop Loop</button>
+        <div class="anim-builder">
+          <h3 class="anim-builder-title">Dynamic Scenes</h3>
+          <p class="anim-section-hint">Pick a palette of colors and the bridge cycles through them continuously.</p>
+          <div id="anim-dynamic-scenes-list" class="anim-dynamic-scenes-list"></div>
+          <button id="anim-new-scene-btn" class="anim-new-scene-btn">+ New Dynamic Scene</button>
         </div>
-        <div id="anim-loop-status" class="anim-loop-status"></div>
+        <div class="anim-loop-builder">
+          <h3 class="anim-builder-title">Scene Loop Playlist</h3>
+          <p class="anim-section-hint">Select scenes and run them in a server-side loop. Looping continues until you stop it.</p>
+          <div id="anim-loop-scene-list" class="anim-loop-scene-list"></div>
+          <div class="anim-loop-controls">
+            <label class="surprise-mini-field">Dwell
+              <select id="anim-loop-dwell-ms" class="surprise-style-select">
+                <option value="3000">3s</option>
+                <option value="5000">5s</option>
+                <option value="8000" selected>8s</option>
+                <option value="12000">12s</option>
+                <option value="20000">20s</option>
+              </select>
+            </label>
+            <label class="surprise-mini-field">Order
+              <select id="anim-loop-mode" class="surprise-style-select">
+                <option value="sequential" selected>Sequential</option>
+                <option value="shuffle">Shuffle</option>
+              </select>
+            </label>
+          </div>
+          <div class="anim-loop-actions">
+            <button id="anim-loop-save-btn" class="anim-add-frame-btn">Save Playlist</button>
+            <button id="anim-loop-start-btn" class="anim-new-scene-btn">Start Loop</button>
+            <button id="anim-loop-stop-btn" class="btn-ghost">Stop Loop</button>
+          </div>
+          <div id="anim-loop-status" class="anim-loop-status"></div>
+        </div>
       </div>
     </div>
 
-    <!-- Automations section -->
+    <!-- Automations section (collapsed by default) -->
     <div id="automations-section" class="room-section hidden">
-      <h2>Automations</h2>
-      <div id="automations-list" class="automations-list"></div>
+      <h2 class="section-heading">
+        Automations
+        <button class="section-collapse-btn section-collapse-btn--collapsed" data-target="automations-body" aria-expanded="false" aria-label="Toggle Automations">▾</button>
+      </h2>
+      <div id="automations-body" class="section-body section-body--collapsed">
+        <div id="automations-list" class="automations-list"></div>
+      </div>
     </div>
   </main>
 
