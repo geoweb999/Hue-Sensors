@@ -26,6 +26,15 @@ function normalizeName(value) {
     .trim();
 }
 
+function compareIds(a, b) {
+  const aNum = Number(a);
+  const bNum = Number(b);
+  const aIsNum = Number.isFinite(aNum);
+  const bIsNum = Number.isFinite(bNum);
+  if (aIsNum && bIsNum && aNum !== bNum) return aNum - bNum;
+  return String(a).localeCompare(String(b));
+}
+
 function resolveResourceDeviceRid(serviceRidToDeviceRid, resource) {
   const ownerRid = resource?.owner?.rid;
   if (!ownerRid) return null;
@@ -285,14 +294,15 @@ function buildDevicesForGroup(groupId, resources) {
     deviceMap[rid].deviceKind = 'dimmer';
   }
 
-  const groupSensorIds = (group.sensors || []).map((id) => String(id));
+  const sortedSensorEntries = Object.entries(sensors || {}).sort((a, b) => compareIds(a[0], b[0]));
+  const groupSensorIds = [...new Set((group.sensors || []).map((id) => String(id)))].sort(compareIds);
   const uniqueBaseForGroup = new Set();
   for (const sid of groupSensorIds) {
     const base = String(sensors[sid]?.uniqueid || '').split('-')[0];
     if (base) uniqueBaseForGroup.add(base);
   }
   const expandedRoomSensorIds = new Set(groupSensorIds);
-  for (const [sid, sensor] of Object.entries(sensors || {})) {
+  for (const [sid, sensor] of sortedSensorEntries) {
     const base = String(sensor?.uniqueid || '').split('-')[0];
     if (base && uniqueBaseForGroup.has(base)) expandedRoomSensorIds.add(String(sid));
   }
@@ -305,7 +315,7 @@ function buildDevicesForGroup(groupId, resources) {
     const roomNameNorm = normalizeName(group.name);
     if (roomNameNorm) {
       const matchedPresenceCandidates = [];
-      for (const [sid, sensor] of Object.entries(sensors || {})) {
+      for (const [sid, sensor] of sortedSensorEntries) {
         const type = String(sensor?.type || '').toLowerCase();
         const sensorNameNorm = normalizeName(sensor?.name);
         if (!type.includes('presence') || !sensorNameNorm) continue;
@@ -322,7 +332,7 @@ function buildDevicesForGroup(groupId, resources) {
         const candidate = matchedPresenceCandidates[0];
         expandedRoomSensorIds.add(candidate.sid);
         if (candidate.base) {
-          for (const [otherSid, otherSensor] of Object.entries(sensors || {})) {
+          for (const [otherSid, otherSensor] of sortedSensorEntries) {
             const otherBase = String(otherSensor?.uniqueid || '').split('-')[0] || null;
             if (otherBase && otherBase === candidate.base) expandedRoomSensorIds.add(String(otherSid));
           }
@@ -339,12 +349,20 @@ function buildDevicesForGroup(groupId, resources) {
     if (sid && !v1SensorIdToDeviceRid.has(sid)) v1SensorIdToDeviceRid.set(sid, d.id);
   }
 
-  const v1UniqueBaseToDeviceRid = new Map();
-  for (const sid of expandedRoomSensorIds) {
+  const expandedRoomSensorIdsOrdered = [...expandedRoomSensorIds].sort(compareIds);
+  const v1UniqueBaseRidCandidates = new Map();
+  for (const sid of expandedRoomSensorIdsOrdered) {
     const s = sensors[sid];
     const rid = v1SensorIdToDeviceRid.get(sid);
     const base = String(s?.uniqueid || '').split('-')[0] || null;
-    if (rid && base) v1UniqueBaseToDeviceRid.set(base, rid);
+    if (!rid || !base) continue;
+    if (!v1UniqueBaseRidCandidates.has(base)) v1UniqueBaseRidCandidates.set(base, new Set());
+    v1UniqueBaseRidCandidates.get(base).add(rid);
+  }
+  const v1UniqueBaseToDeviceRid = new Map();
+  for (const [base, ridSet] of v1UniqueBaseRidCandidates.entries()) {
+    const stableRid = [...ridSet].sort((a, b) => String(a).localeCompare(String(b)))[0];
+    if (stableRid) v1UniqueBaseToDeviceRid.set(base, stableRid);
   }
 
   const ensureDevice = (rid, name) => {
@@ -380,11 +398,11 @@ function buildDevicesForGroup(groupId, resources) {
     return { controlId, event };
   };
 
-  for (const sid of expandedRoomSensorIds) {
+  for (const sid of expandedRoomSensorIdsOrdered) {
     const sensor = sensors[sid];
     if (!sensor) continue;
     const base = String(sensor.uniqueid || '').split('-')[0] || null;
-    const rid = v1SensorIdToDeviceRid.get(sid) || (base ? v1UniqueBaseToDeviceRid.get(base) : null) || `v1:${sid}`;
+    const rid = v1SensorIdToDeviceRid.get(sid) || (base ? v1UniqueBaseToDeviceRid.get(base) : null) || (base ? `v1base:${base}` : `v1sensor:${sid}`);
     ensureDevice(rid, sensor.name || `Sensor ${sid}`);
 
     if (sensor?.config?.battery != null && !deviceMap[rid].battery) {
