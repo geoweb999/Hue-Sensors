@@ -61,20 +61,65 @@ function hasCriticalSnapshotFailures(failedKeys) {
   return false;
 }
 
+function extractHueErrorDescriptions(response) {
+  const errors = Array.isArray(response?.errors) ? response.errors : [];
+  return errors
+    .map((entry) => entry?.description || entry?.error?.description || null)
+    .filter(Boolean);
+}
+
+function validateExpectedResponseShape(key, response, expectedShape) {
+  if (expectedShape === 'list') {
+    if (Array.isArray(response?.data)) return null;
+    const hueErrors = extractHueErrorDescriptions(response);
+    if (hueErrors.length > 0) return `${key}: ${hueErrors.join('; ')}`;
+    return `${key}: invalid response shape (expected data array)`;
+  }
+
+  if (expectedShape === 'object') {
+    if (response && typeof response === 'object' && !Array.isArray(response)) return null;
+    if (Array.isArray(response)) {
+      const hueErrors = response
+        .map((entry) => entry?.error?.description || null)
+        .filter(Boolean);
+      if (hueErrors.length > 0) return `${key}: ${hueErrors.join('; ')}`;
+    }
+    return `${key}: invalid response shape (expected object map)`;
+  }
+
+  return null;
+}
+
+function deviceSignalScore(device) {
+  if (!device || typeof device !== 'object') return 0;
+  let score = 0;
+  if (device.temperature?.valid) score += 1;
+  if (device.motion?.valid) score += 1;
+  if (device.lightLevel?.valid) score += 1;
+  if (Array.isArray(device.buttons) && device.buttons.length > 0) score += 1;
+  if (device.battery && (device.battery.level != null || device.battery.state != null)) score += 1;
+  if (device.connectivity && device.connectivity.status != null) score += 1;
+  return score;
+}
+
+function snapshotSignalScore(devices) {
+  return (devices || []).reduce((sum, device) => sum + deviceSignalScore(device), 0);
+}
+
 async function fetchResources() {
   const requests = [
-    { key: 'rooms', fn: () => hueClient.v2GetRooms() },
-    { key: 'zones', fn: () => hueClient.v2GetZones() },
-    { key: 'groups', fn: () => hueClient.getGroups() },
-    { key: 'lights', fn: () => hueClient.v2GetLights() },
-    { key: 'temperatures', fn: () => hueClient.v2GetTemperature() },
-    { key: 'motions', fn: () => hueClient.v2GetMotion() },
-    { key: 'lightLevels', fn: () => hueClient.v2GetLightLevel() },
-    { key: 'devices', fn: () => hueClient.v2GetDevices() },
-    { key: 'powers', fn: () => hueClient.v2GetDevicePower() },
-    { key: 'connectivities', fn: () => hueClient.v2GetZigbeeConnectivity() },
-    { key: 'buttons', fn: () => hueClient.v2GetButtons() },
-    { key: 'sensors', fn: () => hueClient.getSensors() }
+    { key: 'rooms', shape: 'list', fn: () => hueClient.v2GetRooms() },
+    { key: 'zones', shape: 'list', fn: () => hueClient.v2GetZones() },
+    { key: 'groups', shape: 'object', fn: () => hueClient.getGroups() },
+    { key: 'lights', shape: 'list', fn: () => hueClient.v2GetLights() },
+    { key: 'temperatures', shape: 'list', fn: () => hueClient.v2GetTemperature() },
+    { key: 'motions', shape: 'list', fn: () => hueClient.v2GetMotion() },
+    { key: 'lightLevels', shape: 'list', fn: () => hueClient.v2GetLightLevel() },
+    { key: 'devices', shape: 'list', fn: () => hueClient.v2GetDevices() },
+    { key: 'powers', shape: 'list', fn: () => hueClient.v2GetDevicePower() },
+    { key: 'connectivities', shape: 'list', fn: () => hueClient.v2GetZigbeeConnectivity() },
+    { key: 'buttons', shape: 'list', fn: () => hueClient.v2GetButtons() },
+    { key: 'sensors', shape: 'object', fn: () => hueClient.getSensors() }
   ];
   const settled = await Promise.allSettled(requests.map((request) => request.fn()));
 
@@ -84,8 +129,15 @@ async function fetchResources() {
   const failedKeys = [];
   const byKey = {};
   settled.forEach((result, index) => {
-    const key = requests[index].key;
+    const { key, shape } = requests[index];
     if (result.status === 'fulfilled') {
+      const shapeError = validateExpectedResponseShape(key, result.value, shape);
+      if (shapeError) {
+        byKey[key] = null;
+        failedKeys.push(key);
+        fetchErrors.push(shapeError);
+        return;
+      }
       byKey[key] = result.value;
       return;
     }
@@ -458,6 +510,7 @@ class AccessorySnapshotService {
     this.snapshots = new Map();
     this.intervalHandle = null;
     this.refreshInFlight = null;
+    this.signalDropGraceMs = 120000;
     this.lastError = null;
     this.lastUpdated = null;
   }
@@ -511,24 +564,41 @@ class AccessorySnapshotService {
         });
       }
 
-      if (partialError && this.snapshots.size > 0) {
+      if (this.snapshots.size > 0) {
         for (const [groupId, previousSnapshot] of this.snapshots.entries()) {
           if (!nextSnapshots.has(groupId)) {
-            nextSnapshots.set(groupId, {
-              ...previousSnapshot,
-              stale: true,
-              lastError: partialError
-            });
+            if (partialError) {
+              nextSnapshots.set(groupId, {
+                ...previousSnapshot,
+                stale: true,
+                lastError: partialError
+              });
+            }
             continue;
           }
           const nextSnapshot = nextSnapshots.get(groupId);
           const nextDevices = Array.isArray(nextSnapshot?.devices) ? nextSnapshot.devices : [];
           const prevDevices = Array.isArray(previousSnapshot?.devices) ? previousSnapshot.devices : [];
+
+          const prevSignal = snapshotSignalScore(prevDevices);
+          const nextSignal = snapshotSignalScore(nextDevices);
+          const prevIsRecent = Number.isFinite(previousSnapshot?.lastUpdated)
+            && (refreshedAt - Number(previousSnapshot.lastUpdated)) <= this.signalDropGraceMs;
+          const suspiciousSignalDrop = prevSignal > 0 && nextSignal === 0 && prevIsRecent;
+          if (suspiciousSignalDrop) {
+            nextSnapshots.set(groupId, {
+              ...previousSnapshot,
+              stale: true,
+              lastError: partialError || 'Accessory snapshot degraded unexpectedly; retained last known good data.'
+            });
+            continue;
+          }
+
           if (nextDevices.length === 0 && prevDevices.length > 0) {
             nextSnapshots.set(groupId, {
               ...previousSnapshot,
               stale: true,
-              lastError: partialError
+              lastError: partialError || 'Accessory snapshot temporarily empty; retained last known good data.'
             });
           }
         }
