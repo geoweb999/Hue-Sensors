@@ -202,12 +202,6 @@ function buildChoreographyPositions(lightCount, mode) {
   return positions;
 }
 
-function mapPositionToPaletteIndex(position, paletteSize) {
-  if (paletteSize <= 1) return 0;
-  const t = clamp(Number.isFinite(position) ? position : 0, 0, 1);
-  return Math.round(t * (paletteSize - 1));
-}
-
 function buildChoreographyPalette(basePalette, mode, softness, lightCount) {
   const palette = Array.isArray(basePalette) ? basePalette : [];
   if (palette.length <= 1) return palette.slice();
@@ -1692,16 +1686,11 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
     }));
 
     // Build actions array — required by SceneServicePost schema.
-    // Assign each light a gradient-sampled swatch according to choreography.
+    // Keep action assignment sequential from the choreography-derived palette
+    // (same pattern used by the known-stable pre-choreography flow).
     // Only include dimming/color for lights that support them (on/off-only plugs support neither).
-    const positions = buildChoreographyPositions(lightV2Ids.length, choreographyConfig.mode);
-    const actionSwatches = positions.map((position) => {
-      const paletteIndex = mapPositionToPaletteIndex(position, effectivePalette.length);
-      return effectivePalette[paletteIndex] || effectivePalette[0];
-    });
-
     const actions = lightV2Ids.map((lightId, i) => {
-      const swatch = actionSwatches[i] || effectivePalette[i % effectivePalette.length] || { hex: '#ffffff', brightness: 80 };
+      const swatch = effectivePalette[i % effectivePalette.length] || { hex: '#ffffff', brightness: 80 };
       const caps = lightCapMap[lightId] || {};
       const action = { on: { on: true } };
       if (caps.hasDimming) action.dimming = { brightness: clamp(Number(swatch.brightness) || 80, 1, 100) };
@@ -1727,6 +1716,11 @@ router.post('/v2/rooms/:groupId/dynamic-scene', async (req, res) => {
       const errMsg = recallErrors.map(e => e.description).join('; ');
       return res.status(400).json({ success: false, error: `Scene created but failed to start animation: ${errMsg}` });
     }
+
+    // Some bridge/firmware combinations briefly settle to static after first
+    // dynamic recall. A short second recall improves loop reliability.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await hueClient.v2RecallScene(sceneId, 'dynamic_palette', speed).catch(() => {});
 
     res.json({ success: true, sceneId, choreography: choreographyConfig });
   } catch (error) {
