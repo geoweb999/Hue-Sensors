@@ -1,5 +1,12 @@
 import { getDatabase } from './database.js';
 
+// Only keep the last N days of readings in the in-memory cache.
+// The frontend chart range maxes out at 30 days, so anything older
+// would never be displayed but would consume memory on startup.
+// (Older history is still preserved in SQLite for ad-hoc queries.)
+const READINGS_RETENTION_DAYS = 30;
+const READINGS_RETENTION_MS = READINGS_RETENTION_DAYS * 86400 * 1000;
+
 class DataStore {
   constructor() {
     this.rooms = new Map();
@@ -12,17 +19,18 @@ class DataStore {
     this.database = database;
   }
 
-  // Load all historical data from database
+  // Load recent historical data from database (capped at READINGS_RETENTION_DAYS)
   loadFromDatabase() {
     if (!this.database) {
       console.warn('Database not initialized, skipping data load');
       return;
     }
 
-    console.log('Loading historical data from database...');
+    const cutoff = Date.now() - READINGS_RETENTION_MS;
+    console.log(`Loading last ${READINGS_RETENTION_DAYS} days of readings from database...`);
 
     try {
-      const allReadings = this.database.getAllReadings();
+      const allReadings = this.database.getReadingsSince(cutoff);
 
       if (allReadings.length === 0) {
         console.log('No historical data found in database');
@@ -74,7 +82,7 @@ class DataStore {
 
       const totalReadings = allReadings.length;
       const roomCount = this.rooms.size;
-      console.log(`Loaded ${totalReadings} readings across ${roomCount} rooms from database`);
+      console.log(`Loaded ${totalReadings} readings across ${roomCount} rooms from database (last ${READINGS_RETENTION_DAYS} days)`);
 
       // Set last poll time to most recent reading
       if (allReadings.length > 0) {
@@ -111,6 +119,18 @@ class DataStore {
       temp: temperature,
       motion: motionDetected
     });
+
+    // Prune readings older than the retention window. Readings are appended in
+    // chronological order, so we just walk forward from the front. Typically
+    // 0 or 1 readings per call after warmup, so this is O(1) amortized.
+    const cutoff = timestamp - READINGS_RETENTION_MS;
+    let dropCount = 0;
+    while (dropCount < room.readings.length && room.readings[dropCount].timestamp < cutoff) {
+      dropCount++;
+    }
+    if (dropCount > 0) {
+      room.readings.splice(0, dropCount);
+    }
 
     room.currentTemp = temperature;
     room.currentLux = lux;
