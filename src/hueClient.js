@@ -7,6 +7,10 @@ class HueClient {
   constructor() {
     this.bridgeIp = config.HUE_BRIDGE_IP;
     this.apiToken = config.HUE_API_TOKEN;
+    // When the bridge returns 429 we set a short cooldown so in-flight
+    // requests skip the bridge instead of making the rate-limit worse.
+    this._rateLimitedUntil = 0;
+    this._rateLimitCooldownMs = 2500;
   }
 
   _sanitizePath(path) {
@@ -22,10 +26,29 @@ class HueClient {
     return { contentType, isHtml, preview };
   }
 
+  _isRateLimited() {
+    return this._rateLimitedUntil > Date.now();
+  }
+
+  _markRateLimited(retryAfterSec) {
+    // Respect Retry-After header if present and reasonable, otherwise use default cooldown.
+    const headerMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0 && retryAfterSec <= 30
+      ? retryAfterSec * 1000
+      : this._rateLimitCooldownMs;
+    this._rateLimitedUntil = Date.now() + headerMs;
+  }
+
   _request(path, method = 'GET', body = null) {
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
       const safePath = this._sanitizePath(path);
+
+      // Honour active rate-limit cooldown — fail fast instead of piling on
+      if (this._isRateLimited()) {
+        const msLeft = Math.max(0, this._rateLimitedUntil - Date.now());
+        return reject(new Error(`Hue bridge rate-limited (cooldown ${msLeft}ms remaining)`));
+      }
+
       const attemptOrder = [
         { protocol: 'https', transport: https, port: 443, rejectUnauthorized: false },
         { protocol: 'http', transport: http, port: 80 }
@@ -64,6 +87,24 @@ class HueClient {
           res.on('end', () => {
             const durationMs = Date.now() - startedAt;
             const responseMeta = this._extractResponseMeta(res, data);
+
+            // 429: bridge is rate-limiting us. Don't retry on the alternate protocol —
+            // that just makes it worse. Set a cooldown and reject so callers can degrade.
+            if (res.statusCode === 429) {
+              const retryAfter = parseFloat(res.headers?.['retry-after']);
+              this._markRateLimited(retryAfter);
+              logger.warn('HUE_RATE_LIMITED', 'Hue bridge returned 429 Too Many Requests; backing off', {
+                apiVersion: 'v1',
+                method,
+                path: safePath,
+                durationMs,
+                protocol: cfg.protocol,
+                retryAfter: Number.isFinite(retryAfter) ? retryAfter : null,
+                cooldownMs: Math.max(0, this._rateLimitedUntil - Date.now())
+              });
+              return reject(new Error('Hue bridge rate-limited (HTTP 429)'));
+            }
+
             try {
               const parsed = JSON.parse(data);
               const responseFields = {
@@ -128,6 +169,13 @@ class HueClient {
   _v2Request(path, method = 'GET', body = null) {
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
+
+      // Honour active rate-limit cooldown — fail fast instead of piling on
+      if (this._isRateLimited()) {
+        const msLeft = Math.max(0, this._rateLimitedUntil - Date.now());
+        return reject(new Error(`Hue bridge rate-limited (cooldown ${msLeft}ms remaining)`));
+      }
+
       const headers = { 'hue-application-key': this.apiToken };
       if (body) headers['Content-Type'] = 'application/json';
       const resourcePath = `/clip/v2/resource${path}`;
@@ -153,6 +201,22 @@ class HueClient {
         res.on('end', () => {
           const durationMs = Date.now() - startedAt;
           const responseMeta = this._extractResponseMeta(res, data);
+
+          // 429: bridge is rate-limiting us. Set a cooldown and reject — don't try to parse HTML.
+          if (res.statusCode === 429) {
+            const retryAfter = parseFloat(res.headers?.['retry-after']);
+            this._markRateLimited(retryAfter);
+            logger.warn('HUE_RATE_LIMITED', 'Hue bridge returned 429 Too Many Requests; backing off', {
+              apiVersion: 'v2',
+              method,
+              path: safePath,
+              durationMs,
+              retryAfter: Number.isFinite(retryAfter) ? retryAfter : null,
+              cooldownMs: Math.max(0, this._rateLimitedUntil - Date.now())
+            });
+            return reject(new Error('Hue bridge rate-limited (HTTP 429)'));
+          }
+
           try {
             const parsed = JSON.parse(data);
             const responseFields = {
