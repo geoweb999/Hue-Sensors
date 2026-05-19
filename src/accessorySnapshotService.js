@@ -1,6 +1,37 @@
 import { hueClient } from './hueClient.js';
 import { logger } from './logger.js';
 
+// Max number of concurrent requests against the bridge during a snapshot
+// refresh. Older bridge firmware will return HTTP 429 if we fan out all
+// 12 endpoints at once. 3 keeps the bridge happy while still completing
+// a full refresh in ~200-400ms.
+const SNAPSHOT_CONCURRENCY = 3;
+
+/**
+ * Like Promise.allSettled(tasks.map(t => t())), but processes at most
+ * `limit` tasks concurrently. Returns settled results in input order.
+ */
+async function settledWithConcurrency(taskFns, limit) {
+  const results = new Array(taskFns.length);
+  let next = 0;
+
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= taskFns.length) return;
+      try {
+        results[i] = { status: 'fulfilled', value: await taskFns[i]() };
+      } catch (error) {
+        results[i] = { status: 'rejected', reason: error };
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, taskFns.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 function normalizeSnapshotErrorMessage(error) {
   const raw = String(error?.message || error || '').trim();
   if (!raw) return 'Accessory snapshot refresh failed.';
@@ -121,7 +152,7 @@ async function fetchResources() {
     { key: 'buttons', shape: 'list', fn: () => hueClient.v2GetButtons() },
     { key: 'sensors', shape: 'object', fn: () => hueClient.getSensors() }
   ];
-  const settled = await Promise.allSettled(requests.map((request) => request.fn()));
+  const settled = await settledWithConcurrency(requests.map((request) => request.fn), SNAPSHOT_CONCURRENCY);
 
   const asList = (resp) => (resp && Array.isArray(resp.data) ? resp.data : []);
   const asObj = (resp) => (resp && typeof resp === 'object' && !Array.isArray(resp) ? resp : {});
