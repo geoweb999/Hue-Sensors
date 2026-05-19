@@ -197,7 +197,7 @@ function loadRoomBlinkSettings() {
 function updateFooter() {
   const footerText = document.getElementById('footer-text');
   if (footerText) {
-    footerText.textContent = `Updates and polls Hue Bridge every ${settings.pollRate} seconds | Data persisted to SQLite database | v1.2`;
+    footerText.textContent = `Updates and polls Hue Bridge every ${settings.pollRate} seconds | Data persisted to SQLite database | v2.3`;
   }
 }
 
