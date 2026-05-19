@@ -5,13 +5,48 @@ const REFRESH_INTERVAL = 10000;
 let refreshIntervalId = null;
 let roomId = null;
 let roomData = null;
+let roomFetchSequence = 0;
+let deviceFetchSequence = 0;
 const lightInputActive = {};   // true while user is dragging/editing a light control
 const lightSendTimeouts = {};  // debounce timers per light
 let roomColorWheel = null;
+let surpriseStyles = [];
+let editingSurpriseScene = null;
+const SURPRISE_DEFAULT_ANIMATION_SPEED = 0.5;
+const DEFAULT_CHOREOGRAPHY_MODE = 'left_to_right';
+const DEFAULT_CHOREOGRAPHY_SOFTNESS = 65;
+let surprisePreviewTimeout = null;
+
+const SURPRISE_PALETTE_LIBRARY_KEY = 'hueSurprisePaletteLibrary';
 
 // Room brightness slider state
 let roomBriSliderActive = false;
 let roomBriSendTimeout = null;
+let deviceData = [];
+let deviceSnapshotMeta = {
+  stale: true,
+  lastUpdated: null,
+  lastError: null
+};
+const ROOM_OPS_MODE_DESCRIPTIONS = {
+  timeline: 'Live room operations with bridge snapshot diagnostics and accessory health.',
+  studio: 'Control Studio combines scene launch points and light state distribution in one panel.'
+};
+const ROOM_OPS_MODE_STORAGE_KEY = 'roomOpsMode';
+let currentRoomOpsMode = 'timeline';
+let sceneEditData = null;      // { sceneId, originalLights, lightstates }
+let diagOpen = false;          // Bridge Diagnostics expanded state (persists across re-renders)
+
+const CHOREOGRAPHY_MODE_LABELS = {
+  left_to_right: 'Left → Right',
+  right_to_left: 'Right → Left',
+  center_out: 'Center Out',
+  edges_in: 'Edges In'
+};
+
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 
 // ── Color Conversion ──────────────────────────────────────────────
 
@@ -171,6 +206,30 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function celsiusToFahrenheit(c) {
+  return (c * 9 / 5) + 32;
+}
+
+function formatRelativeTime(isoTimestamp) {
+  if (!isoTimestamp) return 'Unknown';
+  const diffMs = Date.now() - new Date(isoTimestamp).getTime();
+  const s = Math.floor(diffMs / 1000);
+  if (s < 60) return 'Just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hr${h !== 1 ? 's' : ''} ago`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d !== 1 ? 's' : ''} ago`;
+}
+
+function formatDateTime(value) {
+  if (value == null) return 'Unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return date.toLocaleString();
+}
+
 function setColorPickerRingColor(picker, colorHex = null) {
   if (!picker) return;
   const control = picker.closest('.color-picker-control');
@@ -194,6 +253,398 @@ function isDimmable(type) {
 }
 
 // ── Render ────────────────────────────────────────────────────────
+
+const DIMMER_BUTTON_LABELS = { 1: 'On', 2: 'Brighter', 3: 'Dimmer', 4: 'Off' };
+const DIMMER_EVENT_LABELS = {
+  initial_press: 'Pressed',
+  short_release: 'Short press',
+  long_release: 'Long press',
+  repeat: 'Held'
+};
+
+function renderBatteryBadge(battery) {
+  if (!battery || battery.level == null) return '';
+  const level = battery.level;
+  const stateClass = battery.state === 'critical' ? 'battery-critical'
+    : battery.state === 'low' ? 'battery-low'
+    : 'battery-ok';
+  return `<span class="battery-badge ${stateClass}">${level}%</span>`;
+}
+
+function renderConnectivityDot(connectivity) {
+  if (!connectivity) return '';
+  const connected = connectivity.status === 'connected';
+  return `<span class="connectivity-dot ${connected ? 'connectivity-connected' : 'connectivity-disconnected'}" title="${connected ? 'Connected' : 'Disconnected'}"></span>`;
+}
+
+function renderDeviceCard(device) {
+  const deviceKind = String(device.deviceKind || '').toLowerCase();
+  const productName = String(device.productName || '').toLowerCase();
+  const productArchetype = String(device.productArchetype || '').toLowerCase();
+  const isDimmer = deviceKind === 'dimmer'
+    || (device.buttons && device.buttons.length > 0)
+    || productName.includes('dimmer')
+    || productArchetype.includes('dimmer')
+    || productArchetype.includes('switch');
+  const name = escapeHtml(device.name || device.productName || (isDimmer ? 'Dimmer Switch' : 'Sensor'));
+
+  if (isDimmer) {
+    const badges = [
+      renderConnectivityDot(device.connectivity),
+      renderBatteryBadge(device.battery)
+    ].filter(Boolean).join('');
+    const btnCount = device.buttons.length;
+    return `<div class="device-card device-card--dimmer" data-rid="${escapeHtml(device.rid)}" role="button" tabindex="0" aria-label="${name} details">
+      <div class="device-card-header">
+        <div class="device-card-name" title="${name}">${name}</div>
+        <div class="device-card-badges">${badges}</div>
+      </div>
+      <div class="device-card-hint">${btnCount} button${btnCount !== 1 ? 's' : ''} &middot; Tap for details</div>
+    </div>`;
+  }
+
+  // Sensor device (motion/temp/lux)
+  const rows = [];
+
+  if (device.temperature?.valid && device.temperature.celsius != null) {
+    const f = celsiusToFahrenheit(device.temperature.celsius).toFixed(1);
+    rows.push(`<div class="device-sensor-row">
+      <span class="device-sensor-label">Temp</span>
+      <span class="device-sensor-value">${f}°F</span>
+    </div>`);
+  }
+
+  if (device.motion?.valid) {
+    const active = device.motion.detected;
+    rows.push(`<div class="device-sensor-row">
+      <span class="device-sensor-label">Motion</span>
+      <span class="device-sensor-value${active ? ' motion-active' : ''}">${active ? 'Detected' : 'No motion'}</span>
+    </div>`);
+    if (device.motion.lastChanged) {
+      rows.push(`<div class="device-sensor-row">
+        <span class="device-sensor-label">Last seen</span>
+        <span class="device-sensor-value device-sensor-secondary">${formatRelativeTime(device.motion.lastChanged)}</span>
+      </div>`);
+    }
+  }
+
+  if (device.lightLevel?.valid && device.lightLevel.lux != null) {
+    rows.push(`<div class="device-sensor-row">
+      <span class="device-sensor-label">Light</span>
+      <span class="device-sensor-value">${Math.round(device.lightLevel.lux)} lux</span>
+    </div>`);
+  }
+
+  if (rows.length === 0) {
+    rows.push(`<p class="no-items-msg">No sensor data</p>`);
+  }
+
+  return `<div class="device-card" data-rid="${escapeHtml(device.rid)}">
+    <div class="device-card-name" title="${name}">${name}</div>
+    <div class="device-sensors">${rows.join('')}</div>
+  </div>`;
+}
+
+function renderDevices(devices) {
+  const grid = document.getElementById('devices-grid');
+  if (!grid) return;
+  const list = Array.isArray(devices) ? devices : [];
+  if (list.length === 0) {
+    grid.innerHTML = '<p class="no-items-msg">No accessories found for this room.</p>';
+    return;
+  }
+  grid.innerHTML = list.map(renderDeviceCard).join('');
+}
+
+// ── Dimmer modal ──────────────────────────────────────────────────────────────
+
+function openDimmerModal(device) {
+  const modal = document.getElementById('dimmer-modal');
+  if (!modal) return;
+
+  const name = device.name || device.productName || 'Dimmer Switch';
+  document.getElementById('dimmer-modal-title').textContent = name;
+
+  // Meta row: connectivity + battery
+  const metaParts = [];
+  if (device.connectivity) {
+    const connected = device.connectivity.status === 'connected';
+    metaParts.push(`${renderConnectivityDot(device.connectivity)} <span class="dimmer-meta-label">${connected ? 'Connected' : 'Disconnected'}</span>`);
+  }
+  if (device.battery?.level != null) {
+    metaParts.push(`${renderBatteryBadge(device.battery)} <span class="dimmer-meta-label">Battery</span>`);
+  }
+  document.getElementById('dimmer-modal-meta').innerHTML = metaParts.join('<span class="dimmer-meta-sep">·</span>');
+
+  // Button rows
+  const rows = (device.buttons || []).map((btn, index) => {
+    const label = DIMMER_BUTTON_LABELS[btn.controlId] || `Button ${btn.controlId ?? (index + 1)}`;
+    const eventLabel = btn.lastEvent ? (DIMMER_EVENT_LABELS[btn.lastEvent] || btn.lastEvent) : null;
+    const timeLabel = btn.lastUpdated ? formatRelativeTime(btn.lastUpdated) : null;
+    const hasActivity = eventLabel || timeLabel;
+    return `<div class="dimmer-button-row">
+      <div class="dimmer-button-label">${escapeHtml(label)}</div>
+      <div class="dimmer-button-info">
+        ${hasActivity
+          ? `<span class="dimmer-button-event">${escapeHtml(eventLabel || '')}</span>
+             <span class="dimmer-button-time">${escapeHtml(timeLabel || '')}</span>`
+          : `<span class="dimmer-button-never">Never pressed</span>`}
+      </div>
+    </div>`;
+  });
+  document.getElementById('dimmer-buttons-list').innerHTML = rows.length > 0
+    ? rows.join('')
+    : '<div class="dimmer-button-row"><div class="dimmer-button-info"><span class="dimmer-button-never">No button data available</span></div></div>';
+
+  modal.classList.add('active');
+}
+
+function closeDimmerModal() {
+  const modal = document.getElementById('dimmer-modal');
+  if (modal) modal.classList.remove('active');
+}
+
+// ── Scene Light Editor ────────────────────────────────────────────────────────
+
+function buildSceneEditLightRow(light, sceneState) {
+  const inScene = !!sceneState;
+  let initialHex = '#ffffff';
+  if (sceneState?.xy) {
+    const rgb = xyBriToRgb(sceneState.xy[0], sceneState.xy[1], sceneState.bri ?? 254);
+    initialHex = rgbToHex(rgb.r, rgb.g, rgb.b);
+  } else if (sceneState?.ct) {
+    const rgb = ctToRgb(sceneState.ct);
+    initialHex = rgbToHex(rgb.r, rgb.g, rgb.b);
+  } else if (light.xy) {
+    const rgb = xyBriToRgb(light.xy[0], light.xy[1], light.brightness ?? 254);
+    initialHex = rgbToHex(rgb.r, rgb.g, rgb.b);
+  }
+  const bri = Math.round(((sceneState?.bri ?? light.brightness ?? 254) / 254) * 100);
+  const isColor = isColorLight(light.type);
+  const isDim = isDimmable(light.type);
+
+  return `<div class="scene-edit-light-row${inScene ? '' : ' scene-edit-excluded'}" data-light-id="${light.id}">
+    <label class="scene-edit-check-label">
+      <input type="checkbox" class="scene-edit-include" ${inScene ? 'checked' : ''}>
+      <span class="scene-edit-light-name">${escapeHtml(light.name)}</span>
+    </label>
+    <div class="scene-edit-controls">
+      ${isColor ? `<span class="scene-edit-swatch" style="background:${initialHex}"></span>
+        <input type="color" class="scene-edit-color" value="${initialHex}" title="Color">` : ''}
+      ${isDim ? `<input type="range" class="scene-edit-bri" min="1" max="100" value="${bri}" title="Brightness">
+        <span class="scene-edit-bri-label">${bri}%</span>` : ''}
+    </div>
+  </div>`;
+}
+
+async function openSceneEditModal(sceneId) {
+  const modal = document.getElementById('scene-edit-modal');
+  const list = document.getElementById('scene-edit-light-list');
+  const title = document.getElementById('scene-edit-title');
+  const saveBtn = document.getElementById('scene-edit-save-btn');
+  if (!modal || !list) return;
+
+  const scene = (roomData?.scenes || []).find(s => s.id === sceneId);
+  title.textContent = `Edit Scene: ${scene?.name || ''}`;
+  list.innerHTML = '<p class="scene-edit-loading">Loading scene data\u2026</p>';
+  saveBtn.disabled = true;
+  modal.classList.add('active');
+
+  try {
+    const res = await fetch(`/api/scenes/${sceneId}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+
+    sceneEditData = {
+      sceneId,
+      originalLights: data.scene.lights || [],
+      lightstates: data.scene.lightstates || {}
+    };
+
+    const lights = roomData?.lights || [];
+    list.innerHTML = lights.map(l =>
+      buildSceneEditLightRow(l, data.scene.lightstates?.[l.id] || null)
+    ).join('');
+
+    list.querySelectorAll('.scene-edit-light-row').forEach(row => {
+      const colorInput = row.querySelector('.scene-edit-color');
+      const swatch = row.querySelector('.scene-edit-swatch');
+      const briInput = row.querySelector('.scene-edit-bri');
+      const briLabel = row.querySelector('.scene-edit-bri-label');
+      const checkbox = row.querySelector('.scene-edit-include');
+
+      colorInput?.addEventListener('input', () => {
+        if (swatch) swatch.style.background = colorInput.value;
+      });
+      briInput?.addEventListener('input', () => {
+        if (briLabel) briLabel.textContent = `${briInput.value}%`;
+      });
+      checkbox?.addEventListener('change', () => {
+        row.classList.toggle('scene-edit-excluded', !checkbox.checked);
+      });
+    });
+
+    saveBtn.disabled = false;
+  } catch (err) {
+    list.innerHTML = `<p class="scene-edit-error">Failed to load scene: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function closeSceneEditModal() {
+  document.getElementById('scene-edit-modal')?.classList.remove('active');
+  sceneEditData = null;
+}
+
+async function saveSceneEdit() {
+  if (!sceneEditData) return;
+  const saveBtn = document.getElementById('scene-edit-save-btn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving\u2026';
+
+  const rows = document.querySelectorAll('#scene-edit-light-list .scene-edit-light-row');
+  const lights = [];
+  const lightstates = {};
+
+  rows.forEach(row => {
+    const lightId = row.dataset.lightId;
+    const checked = row.querySelector('.scene-edit-include')?.checked;
+    if (!checked) return;
+
+    lights.push(lightId);
+    const colorInput = row.querySelector('.scene-edit-color');
+    const briInput = row.querySelector('.scene-edit-bri');
+    const state = { on: true };
+
+    if (colorInput) {
+      const rgb = hexToRgb(colorInput.value);
+      if (rgb) state.xy = rgbToXy(rgb.r, rgb.g, rgb.b);
+    }
+    if (briInput) {
+      state.bri = Math.round((parseInt(briInput.value, 10) / 100) * 254);
+    }
+    lightstates[lightId] = state;
+  });
+
+  try {
+    const res = await fetch(`/api/scenes/${sceneEditData.sceneId}/lightstates`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lights, lightstates })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+    closeSceneEditModal();
+  } catch (err) {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save Changes';
+    alert(`Failed to save: ${err.message}`);
+  }
+}
+
+function initSceneEditModal() {
+  document.getElementById('scene-edit-close')?.addEventListener('click', closeSceneEditModal);
+  document.getElementById('scene-edit-cancel-btn')?.addEventListener('click', closeSceneEditModal);
+  document.getElementById('scene-edit-save-btn')?.addEventListener('click', saveSceneEdit);
+  document.getElementById('scene-edit-modal')?.addEventListener('click', e => {
+    if (e.target === document.getElementById('scene-edit-modal')) closeSceneEditModal();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.getElementById('scene-edit-modal')?.classList.contains('active')) closeSceneEditModal();
+  });
+}
+
+// ── Collapsible Sections ──────────────────────────────────────────────────────
+
+const COLLAPSE_STORAGE_KEY = 'roomSectionCollapse';
+
+function getCollapseState() {
+  try { return JSON.parse(localStorage.getItem(COLLAPSE_STORAGE_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function saveCollapseState(state) {
+  localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(state));
+}
+
+function initCollapsibleSections() {
+  const state = getCollapseState();
+
+  // Apply default collapsed state for anim + automations if not yet set by user
+  const defaults = { 'anim-body': true, 'automations-body': true };
+
+  document.querySelectorAll('.section-collapse-btn').forEach(btn => {
+    const targetId = btn.dataset.target;
+    const body = document.getElementById(targetId);
+    if (!body) return;
+
+    // Determine initial collapsed state: stored state wins, then button's own class, then defaults
+    let collapsed;
+    if (targetId in state) {
+      collapsed = state[targetId];
+    } else {
+      collapsed = targetId in defaults ? defaults[targetId] : btn.classList.contains('section-collapse-btn--collapsed');
+    }
+
+    if (collapsed) {
+      body.classList.add('section-body--collapsed');
+      btn.setAttribute('aria-expanded', 'false');
+      btn.classList.add('section-collapse-btn--collapsed');
+    } else {
+      body.classList.remove('section-body--collapsed');
+      btn.setAttribute('aria-expanded', 'true');
+      btn.classList.remove('section-collapse-btn--collapsed');
+    }
+
+    btn.addEventListener('click', () => {
+      const isCollapsed = body.classList.contains('section-body--collapsed');
+      body.classList.toggle('section-body--collapsed', !isCollapsed);
+      btn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+      btn.classList.toggle('section-collapse-btn--collapsed', !isCollapsed);
+      const s = getCollapseState();
+      s[targetId] = !isCollapsed;
+      saveCollapseState(s);
+    });
+  });
+
+  // Close kebab menus on outside click
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.scene-kebab-wrap')) closeAllKebabMenus();
+  });
+}
+
+function initDimmerModal() {
+  const modal = document.getElementById('dimmer-modal');
+  if (!modal) return;
+
+  // Close button
+  document.getElementById('dimmer-modal-close')?.addEventListener('click', closeDimmerModal);
+  // Click outside
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeDimmerModal(); });
+  // Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) closeDimmerModal();
+  });
+
+  // Event delegation: clicks on dimmer cards in the devices grid
+  document.getElementById('devices-grid')?.addEventListener('click', (e) => {
+    const card = e.target.closest('.device-card--dimmer');
+    if (!card) return;
+    const rid = card.dataset.rid;
+    const device = (deviceData || []).find(d => d.rid === rid);
+    if (device) openDimmerModal(device);
+  });
+
+  // Keyboard activation for accessibility
+  document.getElementById('devices-grid')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const card = e.target.closest('.device-card--dimmer');
+    if (!card) return;
+    e.preventDefault();
+    const rid = card.dataset.rid;
+    const device = (deviceData || []).find(d => d.rid === rid);
+    if (device) openDimmerModal(device);
+  });
+}
 
 function renderLightCard(light) {
   const swatchColor = lightToSwatchCss(light);
@@ -253,15 +704,35 @@ function renderLightCard(light) {
   `;
 }
 
-function renderSceneCard(scene) {
+function renderSceneCard(scene, surpriseMeta = null) {
   const isAnimated = scene.name.endsWith('-Animation');
   const displayName = isAnimated ? scene.name.slice(0, -'-Animation'.length) : scene.name;
+  const isSurpriseByName = /^surprise\b/i.test(displayName.trim());
+  const isSurpriseByMeta = !!(surpriseMeta && surpriseMeta[scene.id]);
+  const isSurprise = isSurpriseByName || isSurpriseByMeta;
+  const isSurpriseAnimating = !!(surpriseMeta && surpriseMeta[scene.id]?.isAnimating);
+  const isSurprisePaused = !!(surpriseMeta && surpriseMeta[scene.id]?.isPaused);
+  const animateLabel = isSurpriseAnimating ? 'Looping' : 'Animate';
+  const surpriseMenuItems = isSurprise ? `
+        <button class="scene-animate-btn kebab-item" data-scene-id="${scene.id}">${animateLabel}</button>
+        <button class="scene-pause-btn kebab-item" data-scene-id="${scene.id}" ${isSurpriseAnimating ? '' : 'disabled'}>Pause</button>
+        <button class="scene-resume-btn kebab-item" data-scene-id="${scene.id}" ${isSurprisePaused ? '' : 'disabled'}>Resume</button>
+        <button class="scene-stop-btn kebab-item" data-scene-id="${scene.id}">Stop</button>
+        <button class="scene-remix-btn kebab-item" data-scene-id="${scene.id}">Remix</button>` : '';
   return `
     <div class="scene-card${isAnimated ? ' scene-animated' : ''}" data-scene-id="${scene.id}">
       <div class="scene-card-name" title="${escapeHtml(scene.name)}">${escapeHtml(displayName)}</div>
       <div class="scene-card-actions">
-        <button class="scene-activate-btn" data-scene-id="${scene.id}">Activate</button>
-        ${!scene.locked ? `<button class="scene-delete-btn" data-scene-id="${scene.id}" title="Delete scene">&times;</button>` : ''}
+        <button class="scene-activate-btn scene-activate-primary" data-scene-id="${scene.id}">Activate</button>
+        <div class="scene-kebab-wrap">
+          <button class="scene-kebab-btn" data-scene-id="${scene.id}" aria-label="More options" title="More options">&#8943;</button>
+          <div class="scene-kebab-menu" role="menu">
+            <button class="scene-edit-btn kebab-item" data-scene-id="${scene.id}">Edit</button>
+            <button class="scene-rename-btn kebab-item" data-scene-id="${scene.id}">Rename</button>
+            ${surpriseMenuItems}
+            ${!scene.locked ? `<button class="scene-delete-btn kebab-item kebab-item-danger" data-scene-id="${scene.id}">Delete</button>` : ''}
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -273,6 +744,7 @@ function renderScenes(scenes) {
     grid.innerHTML = '<p class="no-items-msg">No scenes saved for this room.</p>';
     return;
   }
+  const surpriseMeta = loadSurpriseSceneMeta(roomId);
 
   const animated = scenes.filter(s => s.name.endsWith('-Animation'));
   const staticScenes = scenes.filter(s => !s.name.endsWith('-Animation'));
@@ -283,12 +755,12 @@ function renderScenes(scenes) {
     if (animated.length > 0) {
       html += '<div class="scenes-subsection-title">Scenes</div>';
     }
-    html += '<div class="scenes-subgrid">' + staticScenes.map(renderSceneCard).join('') + '</div>';
+    html += '<div class="scenes-subgrid">' + staticScenes.map((scene) => renderSceneCard(scene, surpriseMeta)).join('') + '</div>';
   }
 
   if (animated.length > 0) {
     html += '<div class="scenes-subsection-title">Animations</div>';
-    html += '<div class="scenes-subgrid">' + animated.map(renderSceneCard).join('') + '</div>';
+    html += '<div class="scenes-subgrid">' + animated.map((scene) => renderSceneCard(scene, surpriseMeta)).join('') + '</div>';
   }
 
   grid.innerHTML = html;
@@ -377,6 +849,22 @@ function renderRoom(data) {
   document.getElementById('room-title').textContent = data.name;
   document.title = `${data.name} — Hue Dashboard`;
 
+  // Update sticky header meta
+  const onLightsCount = data.lights.filter(l => l.on && l.reachable).length;
+  const headerTemp = document.getElementById('header-temp');
+  const headerLights = document.getElementById('header-lights-status');
+  const headerAllOff = document.getElementById('header-all-off-btn');
+  if (headerTemp) {
+    const tempDev = (deviceData || []).find(d => d.temperature?.valid && Number.isFinite(d.temperature?.celsius));
+    headerTemp.textContent = tempDev ? `🌡️ ${celsiusToFahrenheit(tempDev.temperature.celsius).toFixed(1)}°F` : '';
+  }
+  if (headerLights) {
+    headerLights.textContent = `💡 ${onLightsCount}/${data.lights.length} on`;
+  }
+  if (headerAllOff) {
+    headerAllOff.hidden = false;
+  }
+
   // Room brightness bar
   const anyOn = data.lights.some(l => l.on && l.reachable);
   const briBar = document.getElementById('room-page-brightness');
@@ -422,6 +910,7 @@ function renderRoom(data) {
   const scenesSection = document.getElementById('scenes-section');
   scenesSection.classList.remove('hidden');
   renderScenes(data.scenes);
+  pruneSurpriseSceneMeta(data.scenes);
 
   // Automations
   const autoSection = document.getElementById('automations-section');
@@ -431,6 +920,10 @@ function renderRoom(data) {
   // Animation effects section — always show (v2 check happens inside initAnimationSection)
   const animSection = document.getElementById('anim-section');
   if (animSection) animSection.classList.remove('hidden');
+  const checkedKeys = getCurrentLoopCheckedKeys();
+  renderLoopSceneCandidateList(checkedKeys.size > 0 ? checkedKeys : getLoopSelectionKeysFromStatus());
+
+  renderRoomLayoutShowcase();
 }
 
 // ── Status helpers ────────────────────────────────────────────────
@@ -454,23 +947,343 @@ function showError(msg) {
   document.getElementById('error-message').textContent = msg;
 }
 
+function snapshotRoomLightStates(lights) {
+  const map = new Map();
+  for (const light of (lights || [])) {
+    if (!light || !light.id) continue;
+    map.set(light.id, {
+      on: !!light.on,
+      bri: Number(light.brightness) || 0,
+      hue: Number(light.hue) || 0,
+      sat: Number(light.sat) || 0,
+      ct: Number(light.ct) || 0,
+      x: Array.isArray(light.xy) ? Number(light.xy[0]) : null,
+      y: Array.isArray(light.xy) ? Number(light.xy[1]) : null
+    });
+  }
+  return map;
+}
+
+function detectLightMotionFromSnapshot(beforeSnapshot, lights) {
+  if (!(beforeSnapshot instanceof Map) || beforeSnapshot.size === 0) return false;
+  const afterSnapshot = snapshotRoomLightStates(lights);
+  for (const [lightId, before] of beforeSnapshot.entries()) {
+    const after = afterSnapshot.get(lightId);
+    if (!after) continue;
+    if (before.on !== after.on) return true;
+    if (Math.abs(before.bri - after.bri) >= 2) return true;
+    if (Math.abs(before.hue - after.hue) >= 200) return true;
+    if (Math.abs(before.sat - after.sat) >= 2) return true;
+    if (Math.abs(before.ct - after.ct) >= 2) return true;
+    if (Number.isFinite(before.x) && Number.isFinite(before.y) && Number.isFinite(after.x) && Number.isFinite(after.y)) {
+      const distance = Math.hypot(before.x - after.x, before.y - after.y);
+      if (distance >= 0.0025) return true;
+    }
+  }
+  return false;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchRoomLightsForVerification() {
+  const res = await fetch(`/api/rooms/${roomId}/detail`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error || 'Failed to fetch room detail');
+  return data.room?.lights || [];
+}
+
+function showAnimationVerificationMessage(message) {
+  const el = document.getElementById('last-update');
+  if (!el) return;
+  const previous = el.textContent;
+  el.textContent = message;
+  setTimeout(() => {
+    if (el.textContent === message) el.textContent = previous;
+  }, 5000);
+}
+
+async function verifyAnimationMovement(baselineLights) {
+  const baselineSnapshot = snapshotRoomLightStates(baselineLights);
+  if (baselineSnapshot.size === 0) return null;
+  const probesMs = [900, 1500, 2100];
+  for (const waitMs of probesMs) {
+    await delay(waitMs);
+    try {
+      const lights = await fetchRoomLightsForVerification();
+      if (detectLightMotionFromSnapshot(baselineSnapshot, lights)) return true;
+    } catch {
+      return null;
+    }
+  }
+  return false;
+}
+
 // ── Fetch ─────────────────────────────────────────────────────────
 
 async function fetchAndRenderRoom() {
+  const requestSeq = ++roomFetchSequence;
   try {
     const res = await fetch(`/api/rooms/${roomId}/detail`);
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'API error');
+    if (requestSeq !== roomFetchSequence) return;
 
     roomData = data.room;
     document.getElementById('loading').classList.add('hidden');
     updateStatus('active', 'Connected');
     updateLastUpdateTime();
     renderRoom(data.room);
+    fetchAndRenderDevices(); // refresh sensor readings on every poll
+    refreshRoomLoopStatus({ silent: true });
+    if (v2AnimationsAvailable) {
+      refreshDynamicScenesFromServer({ silent: true });
+    }
   } catch (error) {
     showError(`Connection error: ${error.message}`);
     updateStatus('error', 'Connection failed');
   }
+}
+
+async function fetchAndRenderDevices() {
+  const requestSeq = ++deviceFetchSequence;
+  const section = document.getElementById('devices-section');
+  const grid = document.getElementById('devices-grid');
+  if (!section || !grid) return;
+  try {
+    const res = await fetch(`/api/rooms/${roomId}/devices`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to fetch room accessories');
+    if (requestSeq !== deviceFetchSequence) return;
+
+    deviceData = Array.isArray(data.devices) ? data.devices : [];
+    deviceSnapshotMeta = {
+      stale: !!data.stale,
+      lastUpdated: data.lastUpdated ?? null,
+      lastError: data.lastError ?? null
+    };
+    renderDevices(deviceData);
+    section.classList.remove('hidden');
+    renderRoomLayoutShowcase();
+  } catch {
+    if (requestSeq !== deviceFetchSequence) return;
+    deviceData = [];
+    deviceSnapshotMeta = {
+      stale: true,
+      lastUpdated: null,
+      lastError: 'Accessory snapshot unavailable'
+    };
+    grid.innerHTML = '';
+    section.classList.add('hidden');
+    renderRoomLayoutShowcase();
+  }
+}
+
+function buildNowCards() {
+  const lights = roomData?.lights || [];
+  const devices = deviceData || [];
+  const onCount = lights.filter((l) => l.on && l.reachable).length;
+  const unreachableCount = lights.filter((l) => !l.reachable).length;
+  const dimmerCount = devices.filter((d) => d.deviceKind === 'dimmer' || (d.buttons || []).length > 0).length;
+  const motionDetectedCount = devices.filter((d) => d.motion?.valid && d.motion.detected).length;
+  const tempDevice = devices.find((d) => d.temperature?.valid && Number.isFinite(d.temperature.celsius));
+  const staleState = deviceSnapshotMeta.stale ? 'Stale' : 'Fresh';
+  const staleUpdated = deviceSnapshotMeta.lastUpdated ? ` (${formatRelativeTime(deviceSnapshotMeta.lastUpdated)})` : '';
+
+  return [
+    { label: 'Lights', value: `${onCount}/${lights.length} on`, icon: '💡', colorClass: onCount > 0 ? 'stat-lights-on' : 'stat-lights' },
+    { label: 'Unreachable', value: String(unreachableCount), icon: '⚠️', colorClass: unreachableCount > 0 ? 'stat-warn' : 'stat-neutral' },
+    { label: 'Motion', value: String(motionDetectedCount), icon: '🏃', colorClass: motionDetectedCount > 0 ? 'stat-motion' : 'stat-neutral' },
+    { label: 'Dimmers', value: String(dimmerCount), icon: '🎛️', colorClass: 'stat-dimmers' },
+    { label: 'Temperature', value: tempDevice ? `${celsiusToFahrenheit(tempDevice.temperature.celsius).toFixed(1)}°F` : '—', icon: '🌡️', colorClass: 'stat-temp' },
+    { label: 'Snapshot', value: `${staleState}${staleUpdated}`, icon: '📡', colorClass: deviceSnapshotMeta.stale ? 'stat-stale' : 'stat-fresh' }
+  ];
+}
+
+function renderRoomLayoutShowcase() {
+  const el = document.getElementById('room-layout-showcase');
+  if (!el) return;
+
+  if (!roomData) {
+    el.classList.add('hidden');
+    return;
+  }
+
+  const cards = buildNowCards();
+  const lights = roomData?.lights || [];
+  const devices = deviceData || [];
+  const connectedCount = devices.filter((d) => d.connectivity?.status === 'connected').length;
+  const disconnectedCount = devices.filter((d) => d.connectivity?.status && d.connectivity.status !== 'connected').length;
+  const batteryLowCount = devices.filter((d) => d.battery && (d.battery.state === 'low' || (d.battery.level != null && d.battery.level <= 20))).length;
+  const batteryCriticalCount = devices.filter((d) => d.battery && (d.battery.state === 'critical' || (d.battery.level != null && d.battery.level <= 5))).length;
+  const motionCapableCount = devices.filter((d) => d.motion != null).length;
+  const sensorCount = devices.filter((d) => d.deviceKind !== 'dimmer').length;
+  const dimmerCount = devices.filter((d) => d.deviceKind === 'dimmer' || (d.buttons || []).length > 0).length;
+  const schedulesCount = (roomData?.schedules || []).length;
+  const rulesCount = (roomData?.rules || []).length;
+  const timelineRows = [
+    `Snapshot ${deviceSnapshotMeta.stale ? 'stale' : 'fresh'} as of ${formatDateTime(deviceSnapshotMeta.lastUpdated)}`,
+    `${lights.filter((l) => l.on && l.reachable).length} lights on, ${lights.filter((l) => !l.reachable).length} unreachable`,
+    `${motionCapableCount} motion-capable accessories, ${devices.filter((d) => d.motion?.valid && d.motion.detected).length} currently detecting`,
+    `${rulesCount} rule automations and ${schedulesCount} schedules configured`
+  ];
+
+  el.className = 'room-layout-showcase';
+  el.classList.remove('hidden');
+
+  if (currentRoomOpsMode === 'studio') {
+    const scenes = (roomData?.scenes || []).slice(0, 10);
+    const onLights = lights.filter((l) => l.on).length;
+    const unreachableLights = lights.filter((l) => !l.reachable).length;
+    const colorLights = lights.filter((l) => isColorLight(l.type)).length;
+    const dimmableLights = lights.filter((l) => isDimmable(l.type)).length;
+    const matrix = lights.slice(0, 16).map((light) =>
+      `<span class="mock-dot ${light.on ? 'on' : ''} ${light.reachable ? '' : 'offline'}" title="${escapeHtml(light.name)}"></span>`
+    ).join('');
+
+    el.innerHTML = `
+      <div class="room-layout-grid two-col">
+        <section class="mock-panel">
+          <h3>Scene Launch Deck</h3>
+          <div class="scene-launch-bubbles">
+            ${scenes.length > 0
+              ? scenes.map((scene) => `<button type="button" class="scene-launch-bubble" data-scene-id="${escapeHtml(scene.id)}">${escapeHtml(scene.name)}</button>`).join('')
+              : '<span class="mock-chip">No scenes available</span>'}
+          </div>
+          <ul class="mock-list">
+            <li>Lights active: ${onLights}/${lights.length}</li>
+            <li>Color-capable lights: ${colorLights}</li>
+            <li>Dimmable lights: ${dimmableLights}</li>
+          </ul>
+        </section>
+        <section class="mock-panel">
+          <h3>Fixture Matrix</h3>
+          <div class="mock-matrix">${matrix || '<span class="mock-empty">No lights</span>'}</div>
+          <ul class="mock-list">
+            <li>Snapshot status: ${deviceSnapshotMeta.stale ? 'Stale' : 'Fresh'}</li>
+            <li>Unreachable fixtures: ${unreachableLights}</li>
+            <li>Connected accessories: ${connectedCount}</li>
+          </ul>
+        </section>
+      </div>
+    `;
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="mock-nowcards">
+      ${cards.map((card) => `
+        <article class="mock-nowcard ${escapeHtml(card.colorClass)}">
+          <span class="nowcard-icon">${card.icon}</span>
+          <span class="nowcard-label">${escapeHtml(card.label)}</span>
+          <strong class="nowcard-value">${escapeHtml(card.value)}</strong>
+        </article>`).join('')}
+    </div>
+    <div class="room-layout-grid two-col">
+      <section class="mock-panel">
+        <h3>Activity Timeline</h3>
+        <ul class="mock-list">${timelineRows.map((row) => `<li>${escapeHtml(row)}</li>`).join('')}</ul>
+      </section>
+      <section class="mock-panel mock-panel-diag">
+        <details id="bridge-diag-details"${diagOpen ? ' open' : ''}>
+          <summary class="diag-summary">
+            <span>Bridge Diagnostics</span>
+            <span class="diag-status-pill ${deviceSnapshotMeta.stale ? 'diag-stale' : 'diag-fresh'}">${deviceSnapshotMeta.stale ? 'Stale' : 'Fresh'}</span>
+          </summary>
+          <ul class="mock-list">
+            <li>Snapshot updated: ${escapeHtml(formatDateTime(deviceSnapshotMeta.lastUpdated))}</li>
+            <li>Snapshot error: ${escapeHtml(deviceSnapshotMeta.lastError || 'None')}</li>
+            <li>Accessories: ${devices.length} total (${sensorCount} sensors, ${dimmerCount} dimmers)</li>
+            <li>Connectivity: ${connectedCount} connected, ${disconnectedCount} disconnected</li>
+            <li>Battery health: ${batteryLowCount} low, ${batteryCriticalCount} critical</li>
+          </ul>
+        </details>
+      </section>
+    </div>
+  `;
+
+  // Persist Bridge Diagnostics open/collapsed state across re-renders
+  const diagDetails = el.querySelector('#bridge-diag-details');
+  if (diagDetails) {
+    diagDetails.addEventListener('toggle', () => { diagOpen = diagDetails.open; });
+  }
+}
+
+async function activateSceneFromStudioBubble(sceneId, bubble) {
+  if (!sceneId || !bubble) return;
+  const originalLabel = bubble.textContent;
+  bubble.disabled = true;
+  bubble.classList.add('launching');
+  bubble.textContent = 'Activating...';
+  try {
+    const res = await fetch(`/api/rooms/${roomId}/scene`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sceneId })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+    bubble.classList.remove('launching');
+    bubble.classList.add('activated');
+    bubble.textContent = 'Activated';
+    setTimeout(fetchAndRenderRoom, 650);
+  } catch (error) {
+    bubble.classList.remove('launching');
+    bubble.classList.add('launch-error');
+    bubble.textContent = 'Error';
+    console.error('activateSceneFromStudioBubble error', error);
+  } finally {
+    setTimeout(() => {
+      bubble.classList.remove('activated', 'launch-error', 'launching');
+      bubble.textContent = originalLabel;
+      bubble.disabled = false;
+    }, 1200);
+  }
+}
+
+function setRoomOpsMode(mode) {
+  if (!ROOM_OPS_MODE_DESCRIPTIONS[mode]) return;
+  currentRoomOpsMode = mode;
+  localStorage.setItem(ROOM_OPS_MODE_STORAGE_KEY, mode);
+
+  const description = document.getElementById('room-ops-mode-description');
+  if (description) description.textContent = ROOM_OPS_MODE_DESCRIPTIONS[mode];
+
+  const group = document.getElementById('room-ops-mode-group');
+  if (group) {
+    for (const button of group.querySelectorAll('.layout-mode-btn')) {
+      button.classList.toggle('active', button.dataset.roomOpsMode === mode);
+    }
+  }
+
+  renderRoomLayoutShowcase();
+}
+
+function initRoomOpsModePicker() {
+  const savedMode = localStorage.getItem(ROOM_OPS_MODE_STORAGE_KEY);
+  if (savedMode && ROOM_OPS_MODE_DESCRIPTIONS[savedMode]) {
+    currentRoomOpsMode = savedMode;
+  }
+
+  const group = document.getElementById('room-ops-mode-group');
+  if (!group) return;
+  group.addEventListener('click', (event) => {
+    const button = event.target.closest('.layout-mode-btn');
+    if (!button) return;
+    setRoomOpsMode(button.dataset.roomOpsMode);
+  });
+
+  const showcase = document.getElementById('room-layout-showcase');
+  showcase?.addEventListener('click', (event) => {
+    const bubble = event.target.closest('.scene-launch-bubble');
+    if (!bubble) return;
+    activateSceneFromStudioBubble(bubble.dataset.sceneId, bubble);
+  });
+
+  setRoomOpsMode(currentRoomOpsMode);
 }
 
 // ── Light controls ────────────────────────────────────────────────
@@ -664,9 +1477,8 @@ function initRoomBrightness() {
     setTimeout(() => { roomBriSliderActive = false; }, 600);
   });
 
-  const offBtn = document.getElementById('room-all-off-btn');
-  offBtn.addEventListener('click', async () => {
-    offBtn.disabled = true;
+  const allOffHandler = async (btn) => {
+    btn.disabled = true;
     try {
       await fetch(`/api/rooms/${roomId}/state`, {
         method: 'PUT',
@@ -675,9 +1487,18 @@ function initRoomBrightness() {
       });
       setTimeout(fetchAndRenderRoom, 600);
     } finally {
-      offBtn.disabled = false;
+      btn.disabled = false;
     }
-  });
+  };
+
+  const offBtn = document.getElementById('room-all-off-btn');
+  offBtn.addEventListener('click', () => allOffHandler(offBtn));
+
+  // Mirror in sticky header
+  const headerOffBtn = document.getElementById('header-all-off-btn');
+  if (headerOffBtn) {
+    headerOffBtn.addEventListener('click', () => allOffHandler(headerOffBtn));
+  }
 }
 
 async function sendRoomBrightness(bri) {
@@ -694,8 +1515,773 @@ async function sendRoomBrightness(bri) {
 
 // ── Scenes ────────────────────────────────────────────────────────
 
+function renderSurpriseStylePreview(style) {
+  const preview = document.getElementById('surprise-style-preview');
+  if (!preview) return;
+  if (!style) {
+    preview.innerHTML = '';
+    return;
+  }
+
+  const dots = (style.samplePalette || [])
+    .map((hex) => `<span class="surprise-style-dot" style="background:${escapeHtml(hex)}"></span>`)
+    .join('');
+  const description = style.description ? escapeHtml(style.description) : 'Randomized cohesive swatches.';
+
+  preview.innerHTML = `
+    <div class="surprise-style-dots">${dots}</div>
+    <div class="surprise-style-desc">${description}</div>
+  `;
+}
+
+async function loadSurpriseStyles() {
+  const select = document.getElementById('surprise-style-select');
+  const button = document.getElementById('surprise-scene-btn');
+  if (!select || !button) return;
+
+  try {
+    const res = await fetch('/api/surprises');
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to load surprise styles');
+    surpriseStyles = Array.isArray(data.styles) ? data.styles : [];
+  } catch (error) {
+    console.error('loadSurpriseStyles error:', error.message);
+    surpriseStyles = [];
+  }
+
+  if (surpriseStyles.length === 0) {
+    select.innerHTML = '<option value="">No surprise styles available</option>';
+    select.disabled = true;
+    button.disabled = true;
+    renderSurpriseStylePreview(null);
+    return;
+  }
+
+  select.innerHTML = surpriseStyles.map((style) =>
+    `<option value="${escapeHtml(style.id)}">${escapeHtml(style.name)}</option>`
+  ).join('');
+
+  select.disabled = false;
+  button.disabled = false;
+  renderSurpriseStylePreview(surpriseStyles[0]);
+}
+
+function loadSurpriseSceneMeta(rid) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(`hueSurpriseScenes_${rid}`) || '{}');
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSurpriseSceneMeta(rid, meta) {
+  localStorage.setItem(`hueSurpriseScenes_${rid}`, JSON.stringify(meta));
+}
+
+function loadSurprisePaletteLibrary() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SURPRISE_PALETTE_LIBRARY_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSurprisePaletteLibrary(items) {
+  localStorage.setItem(SURPRISE_PALETTE_LIBRARY_KEY, JSON.stringify(items));
+}
+
+function upsertSurpriseSceneMeta(sceneId, sceneName, styleId, palette) {
+  if (!roomId || !sceneId || !Array.isArray(palette) || palette.length === 0) return;
+  const meta = loadSurpriseSceneMeta(roomId);
+  const previous = meta[sceneId] || {};
+  meta[sceneId] = {
+    sceneName,
+    styleId: styleId || null,
+    palette,
+    animationSceneId: previous.animationSceneId || null,
+    isAnimating: previous.isAnimating || false,
+    isPaused: previous.isPaused || false,
+    animationOptions: previous.animationOptions || null,
+    assignmentMode: previous.assignmentMode || 'random',
+    lightAssignments: previous.lightAssignments || {},
+    transitionMs: Number.isFinite(previous.transitionMs) ? previous.transitionMs : 0,
+    updatedAt: Date.now()
+  };
+  saveSurpriseSceneMeta(roomId, meta);
+}
+
+function setSurpriseAnimatingByAnimationScene(animationSceneId, isAnimating, isPaused = !isAnimating) {
+  if (!roomId || !animationSceneId) return;
+  const meta = loadSurpriseSceneMeta(roomId);
+  let changed = false;
+  for (const sceneMeta of Object.values(meta)) {
+    if (sceneMeta && sceneMeta.animationSceneId === animationSceneId) {
+      sceneMeta.isAnimating = !!isAnimating;
+      sceneMeta.isPaused = !!isPaused;
+      sceneMeta.updatedAt = Date.now();
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveSurpriseSceneMeta(roomId, meta);
+  }
+}
+
+function pruneSurpriseSceneMeta(scenes = []) {
+  if (!roomId) return;
+  const meta = loadSurpriseSceneMeta(roomId);
+  const sceneIds = new Set((scenes || []).map((scene) => scene.id));
+  let changed = false;
+  for (const sceneId of Object.keys(meta)) {
+    if (!sceneIds.has(sceneId)) {
+      delete meta[sceneId];
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveSurpriseSceneMeta(roomId, meta);
+  }
+}
+
+function inferSurpriseStyleFromName(sceneName) {
+  const normalized = String(sceneName || '').toLowerCase();
+  return surpriseStyles.find((style) => normalized.includes(String(style.name || '').toLowerCase())) || null;
+}
+
+function getDefaultSurprisePalette(scene) {
+  const meta = loadSurpriseSceneMeta(roomId);
+  const stored = scene ? meta[scene.id] : null;
+  if (stored && Array.isArray(stored.palette) && stored.palette.length >= 2) {
+    return stored.palette.map((swatch) => ({
+      hex: swatch.hex,
+      brightness: clampNumber(parseInt(swatch.brightness, 10) || 75, 1, 100)
+    }));
+  }
+
+  let style = null;
+  if (stored?.styleId) {
+    style = surpriseStyles.find((entry) => entry.id === stored.styleId) || null;
+  }
+  if (!style && scene) {
+    style = inferSurpriseStyleFromName(scene.name);
+  }
+  if (!style && surpriseStyles.length > 0) {
+    style = surpriseStyles[0];
+  }
+
+  const samplePalette = (style?.samplePalette || ['#c8d8ff', '#f6b8d0', '#c4f0dd']);
+  return samplePalette.slice(0, 6).map((hex) => ({ hex, brightness: 75 }));
+}
+
+function getSelectedSurpriseAnimationSpeed() {
+  const speedSelect = document.getElementById('surprise-speed-select');
+  const speed = parseFloat(speedSelect?.value || String(SURPRISE_DEFAULT_ANIMATION_SPEED));
+  return clampNumber(Number.isFinite(speed) ? speed : SURPRISE_DEFAULT_ANIMATION_SPEED, 0.1, 1);
+}
+
+function getSelectedSurpriseAnimationDirection() {
+  const select = document.getElementById('surprise-anim-direction');
+  return select?.value === 'reverse' ? 'reverse' : 'forward';
+}
+
+function getSelectedSurpriseAnimationPattern() {
+  const select = document.getElementById('surprise-anim-pattern');
+  const pattern = String(select?.value || 'rotate');
+  if (pattern === 'bounce' || pattern === 'random') return pattern;
+  return 'rotate';
+}
+
+function normalizeChoreographyMode(mode) {
+  const value = String(mode || '').trim().toLowerCase();
+  if (value === 'right_to_left') return 'right_to_left';
+  if (value === 'center_out' || value === 'radial') return 'center_out';
+  if (value === 'edges_in') return 'edges_in';
+  return DEFAULT_CHOREOGRAPHY_MODE;
+}
+
+function normalizeChoreographySoftness(softness) {
+  const parsed = Number.parseInt(softness, 10);
+  const value = Number.isFinite(parsed) ? parsed : DEFAULT_CHOREOGRAPHY_SOFTNESS;
+  return clampNumber(value, 0, 100);
+}
+
+function normalizeChoreographyConfig(choreography) {
+  return {
+    mode: normalizeChoreographyMode(choreography?.mode),
+    softness: normalizeChoreographySoftness(choreography?.softness)
+  };
+}
+
+function choreographyModeLabel(mode) {
+  return CHOREOGRAPHY_MODE_LABELS[normalizeChoreographyMode(mode)] || CHOREOGRAPHY_MODE_LABELS[DEFAULT_CHOREOGRAPHY_MODE];
+}
+
+function updateSoftnessLabel(labelEl, softness) {
+  if (!labelEl) return;
+  labelEl.textContent = `${normalizeChoreographySoftness(softness)}%`;
+}
+
+function getSelectedSurpriseChoreography() {
+  const modeSelect = document.getElementById('surprise-anim-choreography');
+  const softnessSlider = document.getElementById('surprise-anim-softness');
+  return normalizeChoreographyConfig({
+    mode: modeSelect?.value,
+    softness: softnessSlider?.value
+  });
+}
+
+function shuffleArray(input) {
+  const arr = input.slice();
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function applyAnimationPattern(palette, direction, pattern) {
+  let output = Array.isArray(palette) ? palette.slice() : [];
+  if (direction === 'reverse') {
+    output.reverse();
+  }
+  if (pattern === 'bounce') {
+    const tail = output.length > 2 ? output.slice(1, -1).reverse() : output.slice().reverse();
+    output = output.concat(tail);
+  } else if (pattern === 'random') {
+    output = shuffleArray(output);
+  } else if (pattern === 'rotate') {
+    const offset = output.length > 1 ? Math.floor(Math.random() * (output.length - 1)) + 1 : 0;
+    output = rotatePalette(output, offset);
+  }
+  return output;
+}
+
+function rotatePalette(palette, offset = 0) {
+  if (!Array.isArray(palette) || palette.length === 0) return [];
+  const normalized = ((offset % palette.length) + palette.length) % palette.length;
+  if (normalized === 0) return palette.slice();
+  return palette.slice(normalized).concat(palette.slice(0, normalized));
+}
+
+function upsertDynamicSceneStorage(sceneId, name, palette, speed, choreography = null) {
+  if (!roomId || !sceneId) return;
+  const scenes = loadAnimScenes();
+  const entry = {
+    sceneId,
+    name,
+    palette: Array.isArray(palette) ? palette : [],
+    speed: clampNumber(parseFloat(speed) || SURPRISE_DEFAULT_ANIMATION_SPEED, 0.1, 1),
+    choreography: normalizeChoreographyConfig(choreography)
+  };
+  const existingIndex = scenes.findIndex((scene) => scene.sceneId === sceneId);
+  if (existingIndex >= 0) {
+    scenes[existingIndex] = { ...scenes[existingIndex], ...entry };
+  } else {
+    scenes.push(entry);
+  }
+  setAnimScenes(scenes);
+}
+
+function removeDynamicSceneStorage(sceneId) {
+  if (!roomId || !sceneId) return;
+  const scenes = loadAnimScenes().filter((scene) => scene.sceneId !== sceneId);
+  setAnimScenes(scenes);
+}
+
+function makeSurpriseSwatchRow(hex = '#ffffff', brightness = 75) {
+  const row = document.createElement('div');
+  row.className = 'anim-frame-row';
+  row.innerHTML = `
+    <span class="anim-frame-swatch" style="background:${escapeHtml(hex)}"></span>
+    <input type="color" class="anim-frame-color" value="${escapeHtml(hex)}">
+    <label class="anim-frame-bri-label">
+      <span>Brightness</span>
+      <input type="range" class="anim-frame-bri" min="1" max="100" value="${clampNumber(parseInt(brightness, 10) || 75, 1, 100)}">
+      <span class="anim-frame-bri-val">${clampNumber(parseInt(brightness, 10) || 75, 1, 100)}%</span>
+    </label>
+    <button class="anim-frame-remove" title="Remove swatch">×</button>
+  `;
+
+  const colorInput = row.querySelector('.anim-frame-color');
+  const swatch = row.querySelector('.anim-frame-swatch');
+  const briSlider = row.querySelector('.anim-frame-bri');
+  const briVal = row.querySelector('.anim-frame-bri-val');
+  const removeBtn = row.querySelector('.anim-frame-remove');
+
+  colorInput.addEventListener('input', () => {
+    swatch.style.background = colorInput.value;
+  });
+  briSlider.addEventListener('input', () => {
+    briVal.textContent = `${briSlider.value}%`;
+  });
+  removeBtn.addEventListener('click', () => {
+    const list = document.getElementById('surprise-swatches-list');
+    if (list.querySelectorAll('.anim-frame-row').length > 2) {
+      row.remove();
+      updateSurpriseSwatchRemovability();
+    }
+  });
+
+  return row;
+}
+
+function updateSurpriseSwatchRemovability() {
+  const list = document.getElementById('surprise-swatches-list');
+  if (!list) return;
+  const rows = list.querySelectorAll('.anim-frame-row');
+  rows.forEach((row) => {
+    const removeBtn = row.querySelector('.anim-frame-remove');
+    if (removeBtn) removeBtn.disabled = rows.length <= 2;
+  });
+}
+
+function getSurprisePaletteFromModal() {
+  const rows = document.querySelectorAll('#surprise-swatches-list .anim-frame-row');
+  return Array.from(rows).map((row) => ({
+    hex: row.querySelector('.anim-frame-color').value,
+    brightness: clampNumber(parseInt(row.querySelector('.anim-frame-bri').value, 10) || 75, 1, 100)
+  }));
+}
+
+function setSurprisePaletteInModal(palette) {
+  const list = document.getElementById('surprise-swatches-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const normalized = (Array.isArray(palette) ? palette : []).slice(0, 8);
+  normalized.forEach((swatch) => {
+    list.appendChild(makeSurpriseSwatchRow(swatch.hex || '#ffffff', swatch.brightness || 75));
+  });
+  if (normalized.length < 2) {
+    ['#c8d8ff', '#f6b8d0'].forEach((hex) => list.appendChild(makeSurpriseSwatchRow(hex, 75)));
+  }
+  updateSurpriseSwatchRemovability();
+  refreshSurpriseLightAssignmentRows();
+}
+
+function refreshSavedPaletteSelect() {
+  const select = document.getElementById('surprise-saved-palette-select');
+  if (!select) return;
+  const library = loadSurprisePaletteLibrary();
+  if (library.length === 0) {
+    select.innerHTML = '<option value="">No saved palettes</option>';
+    return;
+  }
+  select.innerHTML = library.map((item, index) =>
+    `<option value="${index}">${escapeHtml(item.name || `Palette ${index + 1}`)}</option>`
+  ).join('');
+}
+
+function refreshSurpriseTemplateSelect() {
+  const select = document.getElementById('surprise-template-select');
+  if (!select) return;
+  const options = surpriseStyles.map((style) =>
+    `<option value="${escapeHtml(style.id)}">${escapeHtml(style.name)}</option>`
+  );
+  options.unshift('<option value="">Choose template…</option>');
+  select.innerHTML = options.join('');
+}
+
+function applyBrightnessConstraintsToModalSwatches() {
+  const minInput = document.getElementById('surprise-min-brightness');
+  const maxInput = document.getElementById('surprise-max-brightness');
+  const minLabel = document.getElementById('surprise-min-brightness-label');
+  const maxLabel = document.getElementById('surprise-max-brightness-label');
+  if (!minInput || !maxInput) return;
+
+  let minValue = clampNumber(parseInt(minInput.value, 10) || 1, 1, 100);
+  let maxValue = clampNumber(parseInt(maxInput.value, 10) || 100, 1, 100);
+  if (minValue > maxValue) {
+    [minValue, maxValue] = [maxValue, minValue];
+  }
+  minInput.value = String(minValue);
+  maxInput.value = String(maxValue);
+  if (minLabel) minLabel.textContent = `${minValue}%`;
+  if (maxLabel) maxLabel.textContent = `${maxValue}%`;
+
+  const rows = document.querySelectorAll('#surprise-swatches-list .anim-frame-row');
+  rows.forEach((row) => {
+    const slider = row.querySelector('.anim-frame-bri');
+    const label = row.querySelector('.anim-frame-bri-val');
+    const constrained = clampNumber(parseInt(slider.value, 10) || 75, minValue, maxValue);
+    slider.value = String(constrained);
+    if (label) label.textContent = `${constrained}%`;
+  });
+}
+
+function getSurpriseLightAssignmentsFromModal() {
+  const mode = document.getElementById('surprise-assignment-mode')?.value || 'random';
+  if (mode !== 'per-light') {
+    return { assignmentMode: 'random', lightAssignments: {} };
+  }
+  const assignments = {};
+  const rows = document.querySelectorAll('#surprise-light-assignments .surprise-light-assign-row');
+  rows.forEach((row) => {
+    const lightId = row.dataset.lightId;
+    const select = row.querySelector('select');
+    const swatchIndex = parseInt(select?.value, 10);
+    if (lightId && Number.isFinite(swatchIndex) && swatchIndex >= 0) {
+      assignments[lightId] = swatchIndex;
+    }
+  });
+  return { assignmentMode: 'per-light', lightAssignments: assignments };
+}
+
+function refreshSurpriseLightAssignmentRows(savedAssignments = null) {
+  const mode = document.getElementById('surprise-assignment-mode')?.value || 'random';
+  const container = document.getElementById('surprise-light-assignments');
+  if (!container) return;
+  if (mode !== 'per-light') {
+    container.classList.add('hidden');
+    container.innerHTML = '';
+    return;
+  }
+
+  container.classList.remove('hidden');
+  const palette = getSurprisePaletteFromModal();
+  const assignmentSource = savedAssignments && typeof savedAssignments === 'object'
+    ? savedAssignments
+    : (loadSurpriseSceneMeta(roomId)[editingSurpriseScene?.id || '']?.lightAssignments || {});
+  const lights = roomData?.lights || [];
+  container.innerHTML = lights.map((light) => {
+    const savedIndex = Number.parseInt(assignmentSource?.[light.id], 10);
+    const selectedIndex = Number.isFinite(savedIndex) && savedIndex >= 0 && savedIndex < palette.length ? savedIndex : 0;
+    const options = palette.map((swatch, index) => {
+      const selected = index === selectedIndex ? 'selected' : '';
+      return `<option value="${index}" ${selected}>${index + 1}: ${escapeHtml(swatch.hex)} (${swatch.brightness}%)</option>`;
+    }).join('');
+    return `
+      <div class="surprise-light-assign-row" data-light-id="${light.id}">
+        <span class="surprise-light-name" title="${escapeHtml(light.name)}">${escapeHtml(light.name)}</span>
+        <select class="surprise-style-select">${options}</select>
+      </div>
+    `;
+  }).join('');
+}
+
+function queueSurpriseLivePreview() {
+  const livePreviewEnabled = !!document.getElementById('surprise-live-preview-toggle')?.checked;
+  if (!livePreviewEnabled || !editingSurpriseScene) return;
+  if (surprisePreviewTimeout) clearTimeout(surprisePreviewTimeout);
+  surprisePreviewTimeout = setTimeout(async () => {
+    try {
+      const palette = getSurprisePaletteFromModal();
+      if (palette.length < 2) return;
+      const styleId = document.getElementById('surprise-style-select')?.value || null;
+      const transitionMs = parseInt(document.getElementById('surprise-transition-ms')?.value || '0', 10) || 0;
+      const assignmentData = getSurpriseLightAssignmentsFromModal();
+      await fetch(`/api/rooms/${roomId}/surprise/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          styleId,
+          palette,
+          assignmentMode: assignmentData.assignmentMode,
+          lightAssignments: assignmentData.lightAssignments,
+          transitionMs
+        })
+      });
+    } catch (error) {
+      console.warn('Surprise live preview error:', error.message);
+    }
+  }, 280);
+}
+
+function openSurpriseEditor(sceneId) {
+  const scene = (roomData?.scenes || []).find((entry) => entry.id === sceneId);
+  if (!scene) return;
+
+  editingSurpriseScene = scene;
+
+  const modal = document.getElementById('surprise-editor-modal');
+  const title = document.getElementById('surprise-editor-title');
+  const nameInput = document.getElementById('surprise-editor-name');
+  const list = document.getElementById('surprise-swatches-list');
+
+  title.textContent = 'Edit Surprise';
+  nameInput.value = scene.name || '';
+  const meta = loadSurpriseSceneMeta(roomId);
+  const sceneMeta = meta[scene.id] || {};
+
+  const palette = getDefaultSurprisePalette(scene);
+  setSurprisePaletteInModal(palette);
+  refreshSurpriseTemplateSelect();
+  refreshSavedPaletteSelect();
+
+  const assignmentModeSelect = document.getElementById('surprise-assignment-mode');
+  const transitionSelect = document.getElementById('surprise-transition-ms');
+  const livePreviewToggle = document.getElementById('surprise-live-preview-toggle');
+  const minBrightness = document.getElementById('surprise-min-brightness');
+  const maxBrightness = document.getElementById('surprise-max-brightness');
+
+  if (assignmentModeSelect) {
+    assignmentModeSelect.value = sceneMeta.assignmentMode === 'per-light' ? 'per-light' : 'random';
+  }
+  if (transitionSelect) {
+    const transitionMs = Number.isFinite(sceneMeta.transitionMs) ? sceneMeta.transitionMs : 0;
+    transitionSelect.value = ['0', '400', '1000', '2000', '4000'].includes(String(transitionMs))
+      ? String(transitionMs)
+      : '0';
+  }
+  if (livePreviewToggle) {
+    livePreviewToggle.checked = false;
+  }
+  if (minBrightness) minBrightness.value = '35';
+  if (maxBrightness) maxBrightness.value = '100';
+  applyBrightnessConstraintsToModalSwatches();
+  refreshSurpriseLightAssignmentRows(sceneMeta.lightAssignments || {});
+
+  modal.classList.add('active');
+  nameInput.focus();
+}
+
+function closeSurpriseEditor() {
+  const modal = document.getElementById('surprise-editor-modal');
+  const wasPreviewing = !!document.getElementById('surprise-live-preview-toggle')?.checked;
+  const sceneToRestore = editingSurpriseScene?.id || null;
+  modal.classList.remove('active');
+  editingSurpriseScene = null;
+  if (surprisePreviewTimeout) {
+    clearTimeout(surprisePreviewTimeout);
+    surprisePreviewTimeout = null;
+  }
+  if (wasPreviewing && sceneToRestore && roomId) {
+    fetch(`/api/rooms/${roomId}/scene`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sceneId: sceneToRestore })
+    }).catch(() => {});
+  }
+}
+
+function initSurpriseEditorModal() {
+  const modal = document.getElementById('surprise-editor-modal');
+  const closeBtn = document.getElementById('surprise-editor-close');
+  const cancelBtn = document.getElementById('surprise-cancel-btn');
+  const addBtn = document.getElementById('surprise-add-swatch-btn');
+  const saveBtn = document.getElementById('surprise-save-btn');
+  const styleSelect = document.getElementById('surprise-style-select');
+  const templateSelect = document.getElementById('surprise-template-select');
+  const templateApplyBtn = document.getElementById('surprise-template-apply-btn');
+  const assignmentModeSelect = document.getElementById('surprise-assignment-mode');
+  const transitionSelect = document.getElementById('surprise-transition-ms');
+  const livePreviewToggle = document.getElementById('surprise-live-preview-toggle');
+  const minBrightness = document.getElementById('surprise-min-brightness');
+  const maxBrightness = document.getElementById('surprise-max-brightness');
+  const savePaletteBtn = document.getElementById('surprise-save-palette-btn');
+  const loadPaletteBtn = document.getElementById('surprise-load-palette-btn');
+  const deletePaletteBtn = document.getElementById('surprise-delete-palette-btn');
+  const savedPaletteSelect = document.getElementById('surprise-saved-palette-select');
+  const paletteNameInput = document.getElementById('surprise-palette-name');
+
+  closeBtn.addEventListener('click', closeSurpriseEditor);
+  cancelBtn.addEventListener('click', closeSurpriseEditor);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeSurpriseEditor(); });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) {
+      closeSurpriseEditor();
+    }
+  });
+
+  addBtn.addEventListener('click', () => {
+    const list = document.getElementById('surprise-swatches-list');
+    if (list.querySelectorAll('.anim-frame-row').length >= 8) return;
+    list.appendChild(makeSurpriseSwatchRow('#ffffff', 75));
+    updateSurpriseSwatchRemovability();
+    applyBrightnessConstraintsToModalSwatches();
+    refreshSurpriseLightAssignmentRows();
+    queueSurpriseLivePreview();
+  });
+
+  document.getElementById('surprise-swatches-list').addEventListener('input', () => {
+    applyBrightnessConstraintsToModalSwatches();
+    refreshSurpriseLightAssignmentRows();
+    queueSurpriseLivePreview();
+  });
+
+  if (assignmentModeSelect) {
+    assignmentModeSelect.addEventListener('change', () => {
+      refreshSurpriseLightAssignmentRows();
+      queueSurpriseLivePreview();
+    });
+  }
+
+  if (transitionSelect) {
+    transitionSelect.addEventListener('change', () => queueSurpriseLivePreview());
+  }
+
+  if (livePreviewToggle) {
+    livePreviewToggle.addEventListener('change', () => {
+      if (livePreviewToggle.checked) queueSurpriseLivePreview();
+    });
+  }
+
+  if (minBrightness) {
+    minBrightness.addEventListener('input', () => {
+      applyBrightnessConstraintsToModalSwatches();
+      queueSurpriseLivePreview();
+    });
+  }
+  if (maxBrightness) {
+    maxBrightness.addEventListener('input', () => {
+      applyBrightnessConstraintsToModalSwatches();
+      queueSurpriseLivePreview();
+    });
+  }
+
+  if (templateApplyBtn) {
+    templateApplyBtn.addEventListener('click', () => {
+      const styleId = templateSelect?.value || '';
+      if (!styleId) return;
+      const style = surpriseStyles.find((entry) => entry.id === styleId);
+      const palette = (style?.samplePalette || ['#c8d8ff', '#f6b8d0', '#c4f0dd'])
+        .slice(0, 6)
+        .map((hex) => ({ hex, brightness: 75 }));
+      setSurprisePaletteInModal(palette);
+      applyBrightnessConstraintsToModalSwatches();
+      queueSurpriseLivePreview();
+    });
+  }
+
+  if (savePaletteBtn) {
+    savePaletteBtn.addEventListener('click', () => {
+      const name = String(paletteNameInput?.value || '').trim();
+      if (!name) {
+        alert('Enter a palette name to save.');
+        return;
+      }
+      const palette = getSurprisePaletteFromModal();
+      const library = loadSurprisePaletteLibrary();
+      const existingIndex = library.findIndex((entry) => String(entry.name || '').toLowerCase() === name.toLowerCase());
+      const next = { name, palette, updatedAt: Date.now() };
+      if (existingIndex >= 0) {
+        library[existingIndex] = next;
+      } else {
+        library.push(next);
+      }
+      saveSurprisePaletteLibrary(library);
+      refreshSavedPaletteSelect();
+      if (savedPaletteSelect) savedPaletteSelect.value = String(existingIndex >= 0 ? existingIndex : library.length - 1);
+    });
+  }
+
+  if (loadPaletteBtn) {
+    loadPaletteBtn.addEventListener('click', () => {
+      const library = loadSurprisePaletteLibrary();
+      const index = parseInt(savedPaletteSelect?.value || '-1', 10);
+      if (!Number.isFinite(index) || index < 0 || index >= library.length) return;
+      setSurprisePaletteInModal(library[index].palette || []);
+      applyBrightnessConstraintsToModalSwatches();
+      queueSurpriseLivePreview();
+    });
+  }
+
+  if (deletePaletteBtn) {
+    deletePaletteBtn.addEventListener('click', () => {
+      const library = loadSurprisePaletteLibrary();
+      const index = parseInt(savedPaletteSelect?.value || '-1', 10);
+      if (!Number.isFinite(index) || index < 0 || index >= library.length) return;
+      library.splice(index, 1);
+      saveSurprisePaletteLibrary(library);
+      refreshSavedPaletteSelect();
+    });
+  }
+
+  document.getElementById('surprise-light-assignments').addEventListener('change', () => {
+    queueSurpriseLivePreview();
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    if (!editingSurpriseScene) return;
+
+    const name = document.getElementById('surprise-editor-name').value.trim() || editingSurpriseScene.name;
+    const palette = getSurprisePaletteFromModal();
+    const assignmentData = getSurpriseLightAssignmentsFromModal();
+    const transitionMs = parseInt(transitionSelect?.value || '0', 10) || 0;
+
+    if (palette.length < 2) {
+      alert('Please choose at least 2 swatches.');
+      return;
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+      const styleId = styleSelect?.value || null;
+      const res = await fetch(`/api/rooms/${roomId}/surprise/custom`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseSceneId: editingSurpriseScene.id,
+          styleId,
+          name,
+          palette,
+          replaceExisting: true,
+          assignmentMode: assignmentData.assignmentMode,
+          lightAssignments: assignmentData.lightAssignments,
+          transitionMs
+        })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to edit surprise scene');
+
+      const meta = loadSurpriseSceneMeta(roomId);
+      let preservedAnimationSceneId = null;
+      let preservedIsAnimating = false;
+      let preservedIsPaused = false;
+      let preservedAnimationOptions = null;
+      if (data.replacedSceneId && meta[data.replacedSceneId]) {
+        preservedAnimationSceneId = meta[data.replacedSceneId].animationSceneId || null;
+        preservedIsAnimating = !!meta[data.replacedSceneId].isAnimating;
+        preservedIsPaused = !!meta[data.replacedSceneId].isPaused;
+        preservedAnimationOptions = meta[data.replacedSceneId].animationOptions || null;
+        delete meta[data.replacedSceneId];
+      }
+      meta[data.sceneId] = {
+        sceneName: data.sceneName,
+        styleId: data.style?.id || styleId || null,
+        palette: data.palette,
+        animationSceneId: preservedAnimationSceneId,
+        isAnimating: preservedIsAnimating,
+        isPaused: preservedIsPaused,
+        animationOptions: preservedAnimationOptions,
+        assignmentMode: assignmentData.assignmentMode,
+        lightAssignments: assignmentData.lightAssignments,
+        transitionMs,
+        updatedAt: Date.now()
+      };
+      saveSurpriseSceneMeta(roomId, meta);
+
+      closeSurpriseEditor();
+      setTimeout(fetchAndRenderRoom, 500);
+    } catch (error) {
+      alert(`Could not edit surprise scene: ${error.message}`);
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Surprise';
+    }
+  });
+}
+
+function closeAllKebabMenus() {
+  document.querySelectorAll('.scene-kebab-wrap.kebab-open').forEach(w => w.classList.remove('kebab-open'));
+}
+
 function initSceneControls() {
   const grid = document.getElementById('scenes-grid');
+  const saveBtn = document.getElementById('save-scene-btn');
+  const saveInput = document.getElementById('save-scene-input');
+  const surpriseSelect = document.getElementById('surprise-style-select');
+  const surpriseSpeedSelect = document.getElementById('surprise-speed-select');
+  const surpriseDirectionSelect = document.getElementById('surprise-anim-direction');
+  const surprisePatternSelect = document.getElementById('surprise-anim-pattern');
+  const surpriseChoreoSelect = document.getElementById('surprise-anim-choreography');
+  const surpriseSoftnessSlider = document.getElementById('surprise-anim-softness');
+  const surpriseSoftnessLabel = document.getElementById('surprise-anim-softness-label');
+  const surpriseBtn = document.getElementById('surprise-scene-btn');
 
   // Activate scene
   grid.addEventListener('click', async (e) => {
@@ -719,6 +2305,353 @@ function initSceneControls() {
     } catch (err) {
       btn.textContent = 'Error';
       setTimeout(() => { btn.textContent = 'Activate'; btn.disabled = false; }, 2000);
+    }
+  });
+
+  // Rename non-surprise scene
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-rename-btn');
+    if (!btn) return;
+    const sceneId = btn.dataset.sceneId;
+    const scene = (roomData?.scenes || []).find((entry) => entry.id === sceneId);
+    if (!scene) return;
+
+    const currentName = scene.name || '';
+    const nextNameRaw = prompt('Enter a new scene name:', currentName);
+    if (nextNameRaw == null) return;
+    const nextName = nextNameRaw.trim();
+    if (!nextName || nextName === currentName) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    try {
+      const res = await fetch(`/api/scenes/${sceneId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nextName })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to update scene');
+
+      btn.textContent = 'Saved';
+      setTimeout(() => {
+        btn.textContent = 'Rename';
+        btn.disabled = false;
+      }, 1100);
+      setTimeout(fetchAndRenderRoom, 300);
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => {
+        btn.textContent = 'Rename';
+        btn.disabled = false;
+      }, 1800);
+      alert(`Could not edit scene: ${err.message}`);
+    }
+  });
+
+  // Kebab menu toggle
+  grid.addEventListener('click', (e) => {
+    const kebabBtn = e.target.closest('.scene-kebab-btn');
+    if (!kebabBtn) return;
+    e.stopPropagation();
+    const wrap = kebabBtn.closest('.scene-kebab-wrap');
+    const isOpen = wrap.classList.contains('kebab-open');
+    closeAllKebabMenus();
+    if (!isOpen) wrap.classList.add('kebab-open');
+  });
+
+  // Close kebab on any kebab-item click
+  grid.addEventListener('click', (e) => {
+    if (e.target.closest('.kebab-item')) closeAllKebabMenus();
+  });
+
+  // Edit scene: surprise scenes → palette editor, standard scenes → per-light editor
+  grid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.scene-edit-btn');
+    if (!btn) return;
+    const sceneId = btn.dataset.sceneId;
+    const scene = (roomData?.scenes || []).find(s => s.id === sceneId);
+    const meta = loadSurpriseSceneMeta(roomId);
+    const displayName = (scene?.name || '').replace(/-Animation$/, '').trim();
+    const isSurprise = /^surprise\b/i.test(displayName) || !!meta?.[sceneId];
+    if (isSurprise) {
+      openSurpriseEditor(sceneId);
+    } else {
+      openSceneEditModal(sceneId);
+    }
+  });
+
+  // Animate surprise scene using dynamic palette rotation and preset speed
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-animate-btn');
+    if (!btn) return;
+
+    if (!v2RoomInfo) {
+      alert('Surprise animation requires Hue API v2 support for this room.');
+      return;
+    }
+
+    const surpriseScene = (roomData?.scenes || []).find((scene) => scene.id === btn.dataset.sceneId);
+    if (!surpriseScene) return;
+
+    const meta = loadSurpriseSceneMeta(roomId);
+    const storedMeta = meta[surpriseScene.id] || null;
+    const basePalette = getDefaultSurprisePalette(surpriseScene);
+    if (!Array.isArray(basePalette) || basePalette.length < 2) {
+      alert('Could not animate surprise scene: no usable palette found.');
+      return;
+    }
+
+    const direction = getSelectedSurpriseAnimationDirection();
+    const pattern = getSelectedSurpriseAnimationPattern();
+    const animatedPalette = applyAnimationPattern(basePalette, direction, pattern);
+    const speed = getSelectedSurpriseAnimationSpeed();
+    const choreography = getSelectedSurpriseChoreography();
+    const animationName = `${surpriseScene.name} Animation`.slice(0, 32);
+    const baselineLights = Array.isArray(roomData?.lights) ? roomData.lights : [];
+
+    btn.disabled = true;
+    btn.textContent = 'Animating...';
+    try {
+      const previousAnimationSceneId = storedMeta?.animationSceneId || null;
+      if (previousAnimationSceneId) {
+        await fetch(`/api/v2/scenes/${previousAnimationSceneId}`, { method: 'DELETE' }).catch(() => {});
+        removeDynamicSceneStorage(previousAnimationSceneId);
+        if (activeDynamicSceneId === previousAnimationSceneId) {
+          activeDynamicSceneId = null;
+        }
+        setSurpriseAnimatingByAnimationScene(previousAnimationSceneId, false, false);
+      }
+
+      const createRes = await fetch(`/api/v2/rooms/${roomId}/dynamic-scene`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: animationName,
+          palette: animatedPalette,
+          speed,
+          choreography
+        })
+      });
+      const createData = await createRes.json();
+      if (!createData.success) {
+        throw new Error(createData.error || createData.errors?.[0]?.description || 'Failed to animate surprise');
+      }
+      const animationSceneId = createData.sceneId;
+
+      const nextMeta = {
+        sceneName: storedMeta?.sceneName || surpriseScene.name,
+        styleId: storedMeta?.styleId || null,
+        palette: storedMeta?.palette || basePalette,
+        animationSceneId,
+        isAnimating: true,
+        isPaused: false,
+        animationOptions: {
+          speed,
+          direction,
+          pattern,
+          choreography
+        },
+        updatedAt: Date.now()
+      };
+      meta[surpriseScene.id] = nextMeta;
+      saveSurpriseSceneMeta(roomId, meta);
+
+      upsertDynamicSceneStorage(animationSceneId, animationName, animatedPalette, speed, choreography);
+      activeDynamicSceneId = animationSceneId;
+      setSurpriseAnimatingByAnimationScene(animationSceneId, true);
+      renderDynamicScenesList();
+      renderScenes(roomData?.scenes || []);
+
+      btn.textContent = 'Looping';
+      btn.disabled = false;
+      verifyAnimationMovement(baselineLights).then((confirmed) => {
+        if (confirmed === true) {
+          showAnimationVerificationMessage('Animation confirmed: lights are changing.');
+          return;
+        }
+        if (confirmed === false) {
+          showAnimationVerificationMessage('Animation command sent, but no light movement detected yet. Try faster speed or higher-contrast colors.');
+        }
+      });
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => {
+        btn.textContent = 'Animate';
+        btn.disabled = false;
+      }, 2000);
+      alert(`Could not animate surprise scene: ${err.message}`);
+    }
+  });
+
+  // Pause surprise animation
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-pause-btn');
+    if (!btn) return;
+    const scene = (roomData?.scenes || []).find((entry) => entry.id === btn.dataset.sceneId);
+    if (!scene) return;
+    const meta = loadSurpriseSceneMeta(roomId);
+    const sceneMeta = meta[scene.id] || {};
+    const animationSceneId = sceneMeta.animationSceneId || null;
+    if (!animationSceneId) {
+      alert('No animation scene is linked to this surprise yet.');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Pausing...';
+    try {
+      const res = await fetch(`/api/v2/scenes/${animationSceneId}/recall`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'active' })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || data.errors?.[0]?.description || 'Failed to pause');
+      sceneMeta.isAnimating = false;
+      sceneMeta.isPaused = true;
+      sceneMeta.updatedAt = Date.now();
+      meta[scene.id] = sceneMeta;
+      saveSurpriseSceneMeta(roomId, meta);
+      if (activeDynamicSceneId === animationSceneId) activeDynamicSceneId = null;
+      renderDynamicScenesList();
+      renderScenes(roomData?.scenes || []);
+    } catch (error) {
+      alert(`Could not pause surprise animation: ${error.message}`);
+    } finally {
+      btn.textContent = 'Pause';
+      btn.disabled = false;
+    }
+  });
+
+  // Resume surprise animation
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-resume-btn');
+    if (!btn) return;
+    const scene = (roomData?.scenes || []).find((entry) => entry.id === btn.dataset.sceneId);
+    if (!scene) return;
+    const meta = loadSurpriseSceneMeta(roomId);
+    const sceneMeta = meta[scene.id] || {};
+    const animationSceneId = sceneMeta.animationSceneId || null;
+    if (!animationSceneId) {
+      alert('No paused animation scene is linked to this surprise.');
+      return;
+    }
+    const speed = clampNumber(parseFloat(sceneMeta.animationOptions?.speed) || getSelectedSurpriseAnimationSpeed(), 0.1, 1);
+
+    btn.disabled = true;
+    btn.textContent = 'Resuming...';
+    try {
+      const res = await fetch(`/api/v2/scenes/${animationSceneId}/recall`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'dynamic_palette', speed })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || data.errors?.[0]?.description || 'Failed to resume');
+      sceneMeta.isAnimating = true;
+      sceneMeta.isPaused = false;
+      sceneMeta.updatedAt = Date.now();
+      meta[scene.id] = sceneMeta;
+      saveSurpriseSceneMeta(roomId, meta);
+      activeDynamicSceneId = animationSceneId;
+      renderDynamicScenesList();
+      renderScenes(roomData?.scenes || []);
+    } catch (error) {
+      alert(`Could not resume surprise animation: ${error.message}`);
+    } finally {
+      btn.textContent = 'Resume';
+      btn.disabled = false;
+    }
+  });
+
+  // Stop surprise animation for this scene's dedicated dynamic scene
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-stop-btn');
+    if (!btn) return;
+
+    const surpriseScene = (roomData?.scenes || []).find((scene) => scene.id === btn.dataset.sceneId);
+    if (!surpriseScene) return;
+
+    const meta = loadSurpriseSceneMeta(roomId);
+    const animationSceneId = meta[surpriseScene.id]?.animationSceneId || null;
+    if (!animationSceneId) {
+      alert('No running surprise animation is linked to this scene yet.');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Stopping...';
+    try {
+      const stopRes = await fetch(`/api/v2/scenes/${animationSceneId}/recall`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'active' })
+      });
+      const stopData = await stopRes.json();
+      if (!stopData.success) {
+        throw new Error(stopData.error || stopData.errors?.[0]?.description || 'Failed to stop surprise animation');
+      }
+
+      if (activeDynamicSceneId === animationSceneId) {
+        activeDynamicSceneId = null;
+      }
+      setSurpriseAnimatingByAnimationScene(animationSceneId, false, false);
+      const sceneMeta = meta[surpriseScene.id] || {};
+      sceneMeta.isAnimating = false;
+      sceneMeta.isPaused = false;
+      sceneMeta.updatedAt = Date.now();
+      meta[surpriseScene.id] = sceneMeta;
+      saveSurpriseSceneMeta(roomId, meta);
+      renderDynamicScenesList();
+      renderScenes(roomData?.scenes || []);
+
+      btn.textContent = 'Stopped';
+      setTimeout(() => {
+        btn.textContent = 'Stop';
+        btn.disabled = false;
+      }, 1300);
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => {
+        btn.textContent = 'Stop';
+        btn.disabled = false;
+      }, 2000);
+      alert(`Could not stop surprise animation: ${err.message}`);
+    }
+  });
+
+  // Remix existing surprise scene into a new one
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.scene-remix-btn');
+    if (!btn) return;
+
+    const baseSceneId = btn.dataset.sceneId;
+    const styleId = surpriseSelect?.value || null;
+    btn.disabled = true;
+    btn.textContent = 'Remixing...';
+
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/surprise/remix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseSceneId, styleId })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to remix surprise');
+
+      upsertSurpriseSceneMeta(data.sceneId, data.sceneName, data.style?.id || styleId, data.palette || []);
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        console.warn('Surprise remix created with warnings:', data.warnings);
+      }
+
+      btn.textContent = 'Remixed!';
+      setTimeout(() => { btn.textContent = 'Remix'; btn.disabled = false; }, 1500);
+      setTimeout(fetchAndRenderRoom, 500);
+    } catch (err) {
+      btn.textContent = 'Error';
+      setTimeout(() => { btn.textContent = 'Remix'; btn.disabled = false; }, 2000);
+      alert(`Could not remix surprise scene: ${err.message}`);
     }
   });
 
@@ -747,9 +2680,6 @@ function initSceneControls() {
   });
 
   // Save current as new scene
-  const saveBtn = document.getElementById('save-scene-btn');
-  const saveInput = document.getElementById('save-scene-input');
-
   saveInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') saveBtn.click();
   });
@@ -779,6 +2709,74 @@ function initSceneControls() {
       alert(`Could not save scene: ${err.message}`);
     }
   });
+
+  if (surpriseSelect) {
+    surpriseSelect.addEventListener('change', () => {
+      const selected = surpriseStyles.find((style) => style.id === surpriseSelect.value);
+      renderSurpriseStylePreview(selected || null);
+    });
+  }
+
+  if (surpriseSpeedSelect && !surpriseSpeedSelect.value) {
+    surpriseSpeedSelect.value = String(SURPRISE_DEFAULT_ANIMATION_SPEED);
+  }
+  if (surpriseDirectionSelect && !surpriseDirectionSelect.value) {
+    surpriseDirectionSelect.value = 'forward';
+  }
+  if (surprisePatternSelect && !surprisePatternSelect.value) {
+    surprisePatternSelect.value = 'rotate';
+  }
+  if (surpriseChoreoSelect && !surpriseChoreoSelect.value) {
+    surpriseChoreoSelect.value = DEFAULT_CHOREOGRAPHY_MODE;
+  }
+  if (surpriseSoftnessSlider) {
+    surpriseSoftnessSlider.value = String(normalizeChoreographySoftness(surpriseSoftnessSlider.value));
+    updateSoftnessLabel(surpriseSoftnessLabel, surpriseSoftnessSlider.value);
+    surpriseSoftnessSlider.addEventListener('input', () => {
+      updateSoftnessLabel(surpriseSoftnessLabel, surpriseSoftnessSlider.value);
+    });
+  }
+
+  if (surpriseBtn) {
+    surpriseBtn.addEventListener('click', async () => {
+      const styleId = surpriseSelect?.value;
+      if (!styleId) return;
+
+      surpriseBtn.disabled = true;
+      surpriseBtn.textContent = 'Creating...';
+
+      try {
+        const res = await fetch(`/api/rooms/${roomId}/surprise`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ styleId })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to create surprise scene');
+
+        upsertSurpriseSceneMeta(data.sceneId, data.sceneName, data.style?.id || styleId, data.palette || []);
+        if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+          console.warn('Surprise scene created with warnings:', data.warnings);
+        }
+
+        surpriseBtn.textContent = 'Created!';
+        setTimeout(() => {
+          surpriseBtn.textContent = 'Create Surprise';
+          surpriseBtn.disabled = false;
+        }, 1500);
+        setTimeout(fetchAndRenderRoom, 500);
+      } catch (err) {
+        surpriseBtn.textContent = 'Error';
+        setTimeout(() => {
+          surpriseBtn.textContent = 'Create Surprise';
+          surpriseBtn.disabled = false;
+        }, 2000);
+        alert(`Could not create surprise scene: ${err.message}`);
+      }
+    });
+  }
+
+  loadSurpriseStyles();
 }
 
 // ── Animation Effects (Hue API v2) ────────────────────────────────
@@ -786,6 +2784,9 @@ function initSceneControls() {
 // v2 IDs for this room — resolved once on init
 let v2RoomInfo = null; // { roomV2Id, groupedLightId, lightIdMap }
 let activeDynamicSceneId = null; // sceneId currently looping on the bridge
+let roomLoopStatus = null; // server-owned room loop status
+let v2AnimationsAvailable = false;
+let roomDynamicScenes = []; // server-persisted dynamic scene metadata
 
 const EFFECTS = [
   { id: 'candle',     label: '🕯 Candle' },
@@ -807,24 +2808,227 @@ function speedLabel(value) {
   return 'Very Fast';
 }
 
-// localStorage helpers
-function loadAnimScenes(rid) {
-  try {
-    return JSON.parse(localStorage.getItem(`hueV2Scenes_${rid}`) || '[]');
-  } catch { return []; }
+function normalizeDynamicSceneEntry(scene) {
+  if (!scene || typeof scene !== 'object') return null;
+  const sceneId = String(scene.sceneId || '').trim();
+  if (!sceneId) return null;
+  return {
+    sceneId,
+    name: String(scene.name || `Dynamic ${sceneId}`),
+    palette: Array.isArray(scene.palette) ? scene.palette : [],
+    speed: clampNumber(parseFloat(scene.speed) || 0.5, 0.1, 1),
+    choreography: normalizeChoreographyConfig(scene.choreography)
+  };
 }
-function saveAnimScenes(rid, scenes) {
-  localStorage.setItem(`hueV2Scenes_${rid}`, JSON.stringify(scenes));
+
+function loadAnimScenes() {
+  return roomDynamicScenes.slice();
+}
+
+function setAnimScenes(scenes) {
+  roomDynamicScenes = (Array.isArray(scenes) ? scenes : [])
+    .map((scene) => normalizeDynamicSceneEntry(scene))
+    .filter(Boolean);
+}
+
+async function refreshDynamicScenesFromServer({ silent = false } = {}) {
+  if (!roomId) return [];
+  try {
+    const res = await fetch(`/api/rooms/${roomId}/dynamic-scenes`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to fetch dynamic scenes');
+    setAnimScenes(data.scenes || []);
+    renderDynamicScenesList();
+    renderLoopSceneCandidateList();
+    return loadAnimScenes();
+  } catch (error) {
+    if (!silent) {
+      console.warn('Dynamic scene refresh error:', error.message);
+    }
+    return loadAnimScenes();
+  }
+}
+
+function getCurrentLoopCheckedKeys() {
+  return new Set(
+    Array.from(document.querySelectorAll('#anim-loop-scene-list input[type=\"checkbox\"]:checked'))
+      .map((input) => String(input.value || '').trim())
+      .filter(Boolean)
+  );
+}
+
+function getLoopSelectionKeysFromStatus() {
+  if (!roomLoopStatus || !Array.isArray(roomLoopStatus.playlist)) return new Set();
+  return new Set(
+    roomLoopStatus.playlist
+      .map((item) => `${item.sceneType === 'v2' ? 'v2' : 'v1'}:${String(item.sceneId || '')}`)
+      .filter((key) => key !== 'v1:' && key !== 'v2:')
+  );
+}
+
+function buildLoopSceneCandidates() {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const scene of (roomData?.scenes || [])) {
+    const sceneId = String(scene?.id || '').trim();
+    if (!sceneId) continue;
+    const key = `v1:${sceneId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({
+      key,
+      sceneId,
+      sceneType: 'v1',
+      name: scene.name || `Scene ${sceneId}`,
+      source: 'Scene'
+    });
+  }
+
+  if (v2AnimationsAvailable) {
+    for (const scene of loadAnimScenes()) {
+      const sceneId = String(scene?.sceneId || '').trim();
+      if (!sceneId) continue;
+      const key = `v2:${sceneId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({
+        key,
+        sceneId,
+        sceneType: 'v2',
+        name: scene.name || `Dynamic ${sceneId}`,
+        source: 'Dynamic',
+        action: 'dynamic_palette',
+        speed: clampNumber(parseFloat(scene.speed) || 0.5, 0.1, 1)
+      });
+    }
+  }
+
+  return candidates.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+function renderLoopSceneCandidateList(preferredKeys = null) {
+  const container = document.getElementById('anim-loop-scene-list');
+  if (!container) return;
+
+  const currentChecked = getCurrentLoopCheckedKeys();
+  const statusChecked = getLoopSelectionKeysFromStatus();
+  let selectedKeys = new Set();
+  if (preferredKeys instanceof Set) {
+    selectedKeys = preferredKeys;
+  } else if (currentChecked.size > 0) {
+    selectedKeys = currentChecked;
+  } else if (statusChecked.size > 0) {
+    selectedKeys = statusChecked;
+  }
+  const candidates = buildLoopSceneCandidates();
+  if (candidates.length === 0) {
+    container.innerHTML = '<p class="no-items-msg">No scenes available for looping.</p>';
+    return;
+  }
+
+  container.innerHTML = candidates.map((candidate) => {
+    const checked = selectedKeys.has(candidate.key) ? 'checked' : '';
+    const badge = candidate.sceneType === 'v2' ? `${candidate.source} · ${Math.round((candidate.speed || 0.5) * 100)}%` : candidate.source;
+    return `
+      <label class=\"anim-loop-scene-row\">
+        <input
+          type=\"checkbox\"
+          value=\"${escapeHtml(candidate.key)}\"
+          data-scene-id=\"${escapeHtml(candidate.sceneId)}\"
+          data-scene-type=\"${escapeHtml(candidate.sceneType)}\"
+          data-scene-name=\"${escapeHtml(candidate.name)}\"
+          data-scene-action=\"${escapeHtml(candidate.action || '')}\"
+          data-scene-speed=\"${candidate.speed != null ? escapeHtml(String(candidate.speed)) : ''}\"
+          ${checked}
+        >
+        <span class=\"anim-loop-scene-name\" title=\"${escapeHtml(candidate.name)}\">${escapeHtml(candidate.name)}</span>
+        <span class=\"anim-loop-scene-badge\">${escapeHtml(badge)}</span>
+      </label>
+    `;
+  }).join('');
+}
+
+function collectLoopPlaylistFromUi() {
+  const inputs = Array.from(document.querySelectorAll('#anim-loop-scene-list input[type=\"checkbox\"]:checked'));
+  return inputs.map((input) => {
+    const sceneType = input.dataset.sceneType === 'v2' ? 'v2' : 'v1';
+    const entry = {
+      sceneId: String(input.dataset.sceneId || '').trim(),
+      sceneType,
+      name: String(input.dataset.sceneName || '').trim() || null
+    };
+    if (sceneType === 'v2') {
+      entry.action = input.dataset.sceneAction === 'active' ? 'active' : 'dynamic_palette';
+      entry.speed = clampNumber(parseFloat(input.dataset.sceneSpeed) || 0.5, 0.1, 1);
+    }
+    return entry;
+  }).filter((entry) => entry.sceneId);
+}
+
+function getLoopPayloadFromUi() {
+  const dwellSelect = document.getElementById('anim-loop-dwell-ms');
+  const modeSelect = document.getElementById('anim-loop-mode');
+  return {
+    playlist: collectLoopPlaylistFromUi(),
+    dwellMs: parseInt(dwellSelect?.value || '8000', 10) || 8000,
+    mode: modeSelect?.value === 'shuffle' ? 'shuffle' : 'sequential'
+  };
+}
+
+function renderRoomLoopStatusText(loop, fallbackText = null) {
+  const statusEl = document.getElementById('anim-loop-status');
+  if (!statusEl) return;
+  if (!loop) {
+    statusEl.textContent = fallbackText || 'Loop status unavailable.';
+    statusEl.classList.remove('running', 'error');
+    return;
+  }
+
+  const dwellSec = Math.round((Number(loop.dwellMs) || 8000) / 1000);
+  const baseText = loop.isRunning
+    ? `Running: ${Array.isArray(loop.playlist) ? loop.playlist.length : 0} scenes • every ${dwellSec}s • ${loop.mode}`
+    : loop.isConfigured
+      ? `Stopped: ${Array.isArray(loop.playlist) ? loop.playlist.length : 0} scenes configured • ${loop.mode}`
+      : 'No loop configured';
+  statusEl.textContent = loop.lastError ? `${baseText} • Last error: ${loop.lastError}` : baseText;
+  statusEl.classList.toggle('running', !!loop.isRunning);
+  statusEl.classList.toggle('error', !!loop.lastError);
+}
+
+async function refreshRoomLoopStatus({ silent = false } = {}) {
+  const dwellSelect = document.getElementById('anim-loop-dwell-ms');
+  const modeSelect = document.getElementById('anim-loop-mode');
+  try {
+    const res = await fetch(`/api/rooms/${roomId}/loops/status`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to fetch loop status');
+    roomLoopStatus = data.loop || null;
+
+    if (roomLoopStatus) {
+      if (dwellSelect) dwellSelect.value = String(roomLoopStatus.dwellMs || 8000);
+      if (modeSelect) modeSelect.value = roomLoopStatus.mode === 'shuffle' ? 'shuffle' : 'sequential';
+    }
+    renderLoopSceneCandidateList(getLoopSelectionKeysFromStatus());
+    renderRoomLoopStatusText(roomLoopStatus);
+  } catch (error) {
+    if (!silent) {
+      renderRoomLoopStatusText(roomLoopStatus, `Loop status error: ${error.message}`);
+    }
+  }
 }
 
 function renderDynamicSceneCard(scene) {
   const speed = Math.round((scene.speed || 0.5) * 100);
   const isPlaying = activeDynamicSceneId === scene.sceneId;
+  const choreography = normalizeChoreographyConfig(scene.choreography);
+  const choreographyBadge = `${choreographyModeLabel(choreography.mode)} · ${choreography.softness}%`;
   return `
     <div class="anim-scene-card${isPlaying ? ' is-playing' : ''}" data-scene-id="${escapeHtml(scene.sceneId)}">
       <div class="anim-scene-info">
         <span class="anim-scene-name">${escapeHtml(scene.name)}</span>
         <span class="anim-scene-speed-badge">${speedLabel(speed)}</span>
+        <span class="anim-scene-speed-badge">${escapeHtml(choreographyBadge)}</span>
       </div>
       <div class="anim-scene-palette">
         ${(scene.palette || []).map(p => `<span class="anim-palette-dot" style="background:${escapeHtml(p.hex)}"></span>`).join('')}
@@ -841,7 +3045,7 @@ function renderDynamicSceneCard(scene) {
 function renderDynamicScenesList() {
   const list = document.getElementById('anim-dynamic-scenes-list');
   if (!list) return;
-  const scenes = loadAnimScenes(roomId);
+  const scenes = loadAnimScenes();
   if (scenes.length === 0) {
     list.innerHTML = '<p class="no-items-msg">No dynamic scenes saved yet.</p>';
   } else {
@@ -862,27 +3066,33 @@ function renderEffectChips() {
 async function initAnimationSection() {
   // Fetch v2 room info — if bridge doesn't support v2 hide the section gracefully
   const animSection = document.getElementById('anim-section');
+  const effectsRow = animSection?.querySelector('#anim-room-effects');
+  const dynamicBuilder = animSection?.querySelector('.anim-builder');
   try {
     const res = await fetch(`/api/v2/rooms/${roomId}/info`);
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'v2 not available');
     v2RoomInfo = { roomV2Id: data.roomV2Id, groupedLightId: data.groupedLightId, lightIdMap: data.lightIdMap };
+    v2AnimationsAvailable = true;
   } catch (err) {
+    v2RoomInfo = null;
+    v2AnimationsAvailable = false;
+    setAnimScenes([]);
     console.warn('Hue v2 API not available for this room:', err.message);
     if (animSection) {
-      animSection.querySelector('p.anim-section-hint').textContent = `Animation effects unavailable: ${err.message}`;
-      animSection.querySelector('#anim-room-effects').style.display = 'none';
-      animSection.querySelector('.anim-builder').style.display = 'none';
+      animSection.querySelector('p.anim-section-hint').textContent = `Hue v2 dynamic effects unavailable: ${err.message}. Scene loop playlists for regular scenes are still available.`;
+      if (effectsRow) effectsRow.style.display = 'none';
+      if (dynamicBuilder) dynamicBuilder.style.display = 'none';
     }
-    return;
   }
 
-  renderEffectChips();
-  renderDynamicScenesList();
+  if (v2AnimationsAvailable) {
+    renderEffectChips();
+    await refreshDynamicScenesFromServer({ silent: true });
+  }
 
   // Effect chip clicks — apply effect to whole room
-  const effectsRow = document.getElementById('anim-room-effects');
-  effectsRow.addEventListener('click', async (e) => {
+  effectsRow?.addEventListener('click', async (e) => {
     const btn = e.target.closest('.anim-effect-chip');
     if (!btn) return;
     const effect = btn.dataset.effect;
@@ -910,12 +3120,13 @@ async function initAnimationSection() {
 
   // Dynamic scene list — play / stop / delete
   const scenesList = document.getElementById('anim-dynamic-scenes-list');
-  scenesList.addEventListener('click', async (e) => {
+  scenesList?.addEventListener('click', async (e) => {
     // Play — starts looping animation on bridge; stays in "Looping" state until stopped
     const playBtn = e.target.closest('.anim-play-btn');
     if (playBtn) {
       const sceneId = playBtn.dataset.sceneId;
       const speed = parseFloat(playBtn.dataset.speed) || 0.5;
+      const baselineLights = Array.isArray(roomData?.lights) ? roomData.lights : [];
       playBtn.disabled = true;
       playBtn.textContent = '...';
       try {
@@ -927,7 +3138,18 @@ async function initAnimationSection() {
         const data = await res.json();
         if (!data.success) throw new Error(data.error || (data.errors?.[0]?.description) || 'Failed');
         activeDynamicSceneId = sceneId;
+        setSurpriseAnimatingByAnimationScene(sceneId, true);
         renderDynamicScenesList(); // re-render all cards to show looping state
+        renderScenes(roomData?.scenes || []);
+        verifyAnimationMovement(baselineLights).then((confirmed) => {
+          if (confirmed === true) {
+            showAnimationVerificationMessage('Animation confirmed: lights are changing.');
+            return;
+          }
+          if (confirmed === false) {
+            showAnimationVerificationMessage('Animation command sent, but no light movement detected yet. Try faster speed or higher-contrast colors.');
+          }
+        });
       } catch (err) {
         console.error('Play error:', err.message);
         playBtn.textContent = '▶ Play';
@@ -951,6 +3173,8 @@ async function initAnimationSection() {
           activeDynamicSceneId = null;
           renderDynamicScenesList();
         }
+        setSurpriseAnimatingByAnimationScene(sceneId, false, false);
+        renderScenes(roomData?.scenes || []);
       } catch (err) {
         console.error('Stop error:', err.message);
       } finally {
@@ -970,16 +3194,109 @@ async function initAnimationSection() {
       delBtn.disabled = true;
       try {
         await fetch(`/api/v2/scenes/${sceneId}`, { method: 'DELETE' });
-        // Remove from localStorage regardless of bridge result
-        const scenes = loadAnimScenes(roomId).filter(s => s.sceneId !== sceneId);
-        saveAnimScenes(roomId, scenes);
-        renderDynamicScenesList();
+        // Optimistically update local cache, then re-sync from server.
+        removeDynamicSceneStorage(sceneId);
+        await refreshDynamicScenesFromServer({ silent: true });
       } catch (err) {
         console.error('Delete error:', err.message);
         delBtn.disabled = false;
       }
     }
   });
+
+  const loopSaveBtn = document.getElementById('anim-loop-save-btn');
+  const loopStartBtn = document.getElementById('anim-loop-start-btn');
+  const loopStopBtn = document.getElementById('anim-loop-stop-btn');
+
+  loopSaveBtn?.addEventListener('click', async () => {
+    const payload = getLoopPayloadFromUi();
+    if (!Array.isArray(payload.playlist) || payload.playlist.length === 0) {
+      alert('Select at least one scene for the loop playlist.');
+      return;
+    }
+    loopSaveBtn.disabled = true;
+    const originalLabel = loopSaveBtn.textContent;
+    loopSaveBtn.textContent = 'Saving...';
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/loops`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to save loop');
+      roomLoopStatus = data.loop || roomLoopStatus;
+      renderRoomLoopStatusText(roomLoopStatus);
+      renderLoopSceneCandidateList(getLoopSelectionKeysFromStatus());
+      loopSaveBtn.textContent = 'Saved';
+    } catch (error) {
+      loopSaveBtn.textContent = 'Error';
+      alert(`Could not save loop playlist: ${error.message}`);
+    } finally {
+      setTimeout(() => {
+        loopSaveBtn.textContent = originalLabel;
+        loopSaveBtn.disabled = false;
+      }, 900);
+    }
+  });
+
+  loopStartBtn?.addEventListener('click', async () => {
+    const payload = getLoopPayloadFromUi();
+    if (!Array.isArray(payload.playlist) || payload.playlist.length === 0) {
+      alert('Select at least one scene to start the loop.');
+      return;
+    }
+    loopStartBtn.disabled = true;
+    const originalLabel = loopStartBtn.textContent;
+    loopStartBtn.textContent = 'Starting...';
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/loops/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to start loop');
+      roomLoopStatus = data.loop || roomLoopStatus;
+      renderRoomLoopStatusText(roomLoopStatus);
+      renderLoopSceneCandidateList(getLoopSelectionKeysFromStatus());
+      loopStartBtn.textContent = 'Running';
+    } catch (error) {
+      loopStartBtn.textContent = 'Error';
+      alert(`Could not start loop: ${error.message}`);
+    } finally {
+      setTimeout(() => {
+        loopStartBtn.textContent = originalLabel;
+        loopStartBtn.disabled = false;
+      }, 900);
+    }
+  });
+
+  loopStopBtn?.addEventListener('click', async () => {
+    loopStopBtn.disabled = true;
+    const originalLabel = loopStopBtn.textContent;
+    loopStopBtn.textContent = 'Stopping...';
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/loops/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to stop loop');
+      roomLoopStatus = data.loop || roomLoopStatus;
+      renderRoomLoopStatusText(roomLoopStatus);
+    } catch (error) {
+      loopStopBtn.textContent = 'Error';
+      alert(`Could not stop loop: ${error.message}`);
+    } finally {
+      setTimeout(() => {
+        loopStopBtn.textContent = originalLabel;
+        loopStopBtn.disabled = false;
+      }, 900);
+    }
+  });
+
+  refreshRoomLoopStatus({ silent: false });
 }
 
 // ── Animation builder modal ────────────────────────────────────────
@@ -1038,6 +3355,9 @@ function openAnimModal(scene = null) {
   const framesList = document.getElementById('anim-frames-list');
   const speedSlider = document.getElementById('anim-speed-slider');
   const speedLabelEl = document.getElementById('anim-speed-label');
+  const choreoModeSelect = document.getElementById('anim-choreo-mode');
+  const choreoSoftnessSlider = document.getElementById('anim-choreo-softness');
+  const choreoSoftnessLabel = document.getElementById('anim-choreo-softness-label');
 
   framesList.innerHTML = '';
 
@@ -1047,13 +3367,20 @@ function openAnimModal(scene = null) {
     const speedVal = Math.round((scene.speed || 0.5) * 100);
     speedSlider.value = speedVal;
     speedLabelEl.textContent = speedLabel(speedVal);
+    const choreography = normalizeChoreographyConfig(scene.choreography);
+    if (choreoModeSelect) choreoModeSelect.value = choreography.mode;
+    if (choreoSoftnessSlider) choreoSoftnessSlider.value = String(choreography.softness);
+    updateSoftnessLabel(choreoSoftnessLabel, choreography.softness);
     (scene.palette || []).forEach(p => framesList.appendChild(makeFrameRow(p.hex, p.brightness || 80)));
-    editingSceneIndex = loadAnimScenes(roomId).findIndex(s => s.sceneId === scene.sceneId);
+    editingSceneIndex = loadAnimScenes().findIndex(s => s.sceneId === scene.sceneId);
   } else {
     title.textContent = 'New Dynamic Scene';
     nameInput.value = '';
     speedSlider.value = 40;
     speedLabelEl.textContent = speedLabel(40);
+    if (choreoModeSelect) choreoModeSelect.value = DEFAULT_CHOREOGRAPHY_MODE;
+    if (choreoSoftnessSlider) choreoSoftnessSlider.value = String(DEFAULT_CHOREOGRAPHY_SOFTNESS);
+    updateSoftnessLabel(choreoSoftnessLabel, DEFAULT_CHOREOGRAPHY_SOFTNESS);
     DEFAULT_FRAME_COLORS.forEach(hex => framesList.appendChild(makeFrameRow(hex)));
     editingSceneIndex = -1;
   }
@@ -1074,6 +3401,9 @@ function initAnimBuilderModal() {
   const addFrameBtn = document.getElementById('anim-add-frame-btn');
   const speedSlider = document.getElementById('anim-speed-slider');
   const speedLabelEl = document.getElementById('anim-speed-label');
+  const choreoModeSelect = document.getElementById('anim-choreo-mode');
+  const choreoSoftnessSlider = document.getElementById('anim-choreo-softness');
+  const choreoSoftnessLabel = document.getElementById('anim-choreo-softness-label');
   const saveBtn = document.getElementById('anim-save-btn');
   const newSceneBtn = document.getElementById('anim-new-scene-btn');
 
@@ -1092,6 +3422,13 @@ function initAnimBuilderModal() {
   speedSlider.addEventListener('input', () => {
     speedLabelEl.textContent = speedLabel(parseInt(speedSlider.value));
   });
+  if (choreoSoftnessSlider) {
+    choreoSoftnessSlider.value = String(normalizeChoreographySoftness(choreoSoftnessSlider.value));
+    updateSoftnessLabel(choreoSoftnessLabel, choreoSoftnessSlider.value);
+    choreoSoftnessSlider.addEventListener('input', () => {
+      updateSoftnessLabel(choreoSoftnessLabel, choreoSoftnessSlider.value);
+    });
+  }
 
   // Add frame
   addFrameBtn.addEventListener('click', () => {
@@ -1113,6 +3450,10 @@ function initAnimBuilderModal() {
       brightness: parseInt(row.querySelector('.anim-frame-bri').value)
     }));
     const speed = parseInt(document.getElementById('anim-speed-slider').value) / 100;
+    const choreography = normalizeChoreographyConfig({
+      mode: choreoModeSelect?.value,
+      softness: choreoSoftnessSlider?.value
+    });
 
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving...';
@@ -1120,7 +3461,7 @@ function initAnimBuilderModal() {
     try {
       // If editing, delete the old bridge scene first
       if (editingSceneIndex >= 0) {
-        const existing = loadAnimScenes(roomId)[editingSceneIndex];
+        const existing = loadAnimScenes()[editingSceneIndex];
         if (existing?.sceneId) {
           await fetch(`/api/v2/scenes/${existing.sceneId}`, { method: 'DELETE' }).catch(() => {});
         }
@@ -1129,21 +3470,12 @@ function initAnimBuilderModal() {
       const res = await fetch(`/api/v2/rooms/${roomId}/dynamic-scene`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, palette, speed })
+        body: JSON.stringify({ name, palette, speed, choreography })
       });
       const data = await res.json();
       if (!data.success) throw new Error((data.errors?.[0]?.description) || data.error || 'Failed');
 
-      // Persist to localStorage
-      const scenes = loadAnimScenes(roomId);
-      const sceneEntry = { sceneId: data.sceneId, name, palette, speed };
-      if (editingSceneIndex >= 0) {
-        scenes[editingSceneIndex] = sceneEntry;
-      } else {
-        scenes.push(sceneEntry);
-      }
-      saveAnimScenes(roomId, scenes);
-      renderDynamicScenesList();
+      await refreshDynamicScenesFromServer({ silent: true });
       closeAnimModal();
     } catch (err) {
       saveBtn.textContent = 'Error — retry?';
@@ -1170,7 +3502,12 @@ async function init() {
   initLightControls();
   initRoomBrightness();
   initSceneControls();
+  initSurpriseEditorModal();
   initAnimBuilderModal();
+  initCollapsibleSections();
+  initSceneEditModal();
+  initDimmerModal();
+  initRoomOpsModePicker();
 
   await fetchAndRenderRoom();
   refreshIntervalId = setInterval(fetchAndRenderRoom, REFRESH_INTERVAL);

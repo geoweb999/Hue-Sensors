@@ -8,6 +8,12 @@ A real-time web application that monitors and visualizes temperature, light leve
 
 This dashboard continuously polls your Philips Hue Bridge to collect environmental data from Hue motion sensors. It displays current conditions and historical trends through interactive graphs, making it easy to monitor temperature patterns and occupancy in different rooms of your home.
 
+## Agent Documentation
+
+For technical handoff context aimed at coding agents (architecture, module ownership, API map, data flow, storage schema, snapshot diagnostics pipeline, and debugging workflow), see:
+
+- `docs/AGENT_TECHNICAL_GUIDE.md`
+
 ### Key Features
 
 - **Real-time Monitoring**: Continuously polls Hue Bridge at configurable intervals (default: 10 seconds)
@@ -15,6 +21,8 @@ This dashboard continuously polls your Philips Hue Bridge to collect environment
 - **Motion Detection**: Visual indicators showing current motion status and when motion was last detected
 - **Light Level Monitoring**: Displays ambient light levels in lux
 - **Lights Dashboard**: View and control all Hue lights — toggle power, adjust brightness, pick colors, and set color temperature
+- **Stable Room Accessories**: Snapshot-backed accessory endpoint for room details (motion sensors, dimmers, battery/connectivity, button events) with stale-state metadata during bridge outages
+- **Surprise Scenes**: One-click random scene generator with 10 curated swatch styles, randomized default brightness (80-100), editable color/brightness swatches, per-light assignment mode, reusable palette library, live preview toggle, per-scene animation controls, and gradient choreography modes (left→right, right→left, center-out, edges-in) with softness control
 - **Interactive Graphs**: Auto-scaling temperature charts with motion events highlighted as green dots
 - **Smart Data Sampling**: Automatic sampling strategies (hourly/15-min/all) optimize performance for large datasets
 - **Time Range Controls**: Quick-select buttons for viewing 1-hour, 1-day, 7-day, 30-day, or auto-selected ranges
@@ -33,6 +41,7 @@ src/
 ├── config.js          # Environment configuration and validation
 ├── database.js        # SQLite database operations and persistence
 ├── dataStore.js       # In-memory cache + database integration
+├── accessorySnapshotService.js # Background room accessory snapshot refresher
 ├── hueClient.js       # Philips Hue Bridge API integration
 └── api/
     └── routes.js      # REST API endpoints for frontend
@@ -43,6 +52,7 @@ src/
 - **Hue Client**: Connects to Hue Bridge via HTTPS, fetches sensor data, and matches temperature/motion/light sensors from the same physical device
 - **Database Layer**: SQLite database with better-sqlite3 for persistent storage of all readings
 - **Data Store**: Maintains in-memory cache of all readings for fast access, writes to database on each poll
+- **Accessory Snapshot Service**: Builds deterministic per-room accessory snapshots in the background and preserves last-good state when bridge requests fail
 - **API Layer**: Provides REST endpoints for room lists, detailed historical data, and database statistics
 - **Polling Service**: Background service that queries Hue Bridge at configured intervals
 
@@ -224,10 +234,31 @@ The dashboard automatically optimizes graph performance when you have accumulate
 |----------|--------|-------------|
 | `/api/rooms` | GET | List all rooms with current readings |
 | `/api/rooms/:roomId` | GET | Detailed room data with full history |
+| `/api/rooms/:groupId/devices` | GET | Snapshot-backed room accessories with `stale`, `lastUpdated`, and `lastError` metadata |
+| `/api/surprises` | GET | List curated surprise swatch styles |
+| `/api/rooms/:groupId/surprise` | POST | Create a randomized cohesive scene for a room |
+| `/api/rooms/:groupId/surprise/remix` | POST | Modify an existing surprise style and save as a new scene |
+| `/api/rooms/:groupId/surprise/custom` | POST | Edit scene colors/brightness with custom swatches and save an updated scene |
+| `/api/rooms/:groupId/surprise/preview` | POST | Preview swatches live without creating a scene |
+| `/api/scenes/:sceneId` | PUT | Edit an existing scene (rename) |
+| `/api/v2/rooms/:groupId/dynamic-scene` | POST | Create and start a Hue v2 dynamic palette scene with optional choreography `{ mode, softness }` |
 | `/api/lights` | GET | All lights grouped by room with state/color info |
 | `/api/lights/:id/state` | PUT | Control a light (on, bri, hue, sat, xy, ct, effect, alert, transitiontime) |
 | `/api/health` | GET | Health check and last poll timestamp |
 | `/api/stats` | GET | Database statistics (total readings, size, data range) |
+
+### Dynamic Scene Choreography
+
+`POST /api/v2/rooms/:groupId/dynamic-scene` accepts:
+
+- `name`: scene name
+- `palette`: array of `{ hex, brightness }` swatches
+- `speed`: animation speed (`0.1 - 1.0`)
+- `choreography` (optional):
+  - `mode`: `left_to_right` | `right_to_left` | `center_out` | `edges_in`
+  - `softness`: `0 - 100` (higher = smoother interpolation between swatches)
+
+When choreography is provided, the backend assigns per-light gradient positions using a deterministic light ordering so color placement is stable across recalls.
 
 ## Data Flow
 
@@ -497,15 +528,28 @@ MIT License - feel free to use this project for personal or commercial purposes.
 ---
 
 **Version**: 2.1.0
-**Last Updated**: February 2026
+**Last Updated**: March 2026
 
 ## Changelog
+
+### Version 2.2.0 (March 2026)
+- **Gradient Choreography for Dynamic Scenes**: Added spatial choreography controls for colorful room animations
+  - New choreography modes: `Left → Right`, `Right → Left`, `Center Out`, `Edges In`
+  - New `Softness` control (`0-100`) to tune hard color steps vs. smooth blends
+  - Surprise animation actions and dynamic scene builder now both pass choreography settings to the backend
+  - Dynamic scene cards now display choreography metadata for quick at-a-glance scene identification
+  - `/api/v2/rooms/:groupId/dynamic-scene` now accepts optional `choreography` payload and applies per-light gradient sampling
 
 ### Version 2.1.0 (February 2026)
 - **Circular Color Picker**: Color-capable lights in the control modal now display a circular hue/saturation wheel for intuitive color selection alongside the existing hex input
 - **Per-Room Temperature Offset**: Each room card gains a `±20°F` calibration input — adjusts the displayed temperature and all chart data points in real time; persisted to localStorage
 - **Structured JSON Logging**: Backend now emits structured JSON log lines for all key events (startup, polling, bridge requests, API calls, errors) — configurable via `LOG_LEVEL`, `LOG_PRETTY`, and `SERVICE_NAME` env vars
 - **Hue v2 Event Stream**: Server subscribes to the Hue Bridge v2 SSE event stream (`/eventstream/clip/v2`) with automatic reconnect on disconnect; controlled by `EVENT_STREAM_ENABLED` env var
+- **Surprise Scene Builder**: Added curated surprise style generation, remixing, and custom swatch editing for room scenes
+  - New Surprise endpoints: style discovery, create, remix, and custom edit flows
+  - Default generated surprise brightness now randomizes between `80–100`
+  - Scene cards now include `Edit` (swatches), `Rename`, `Animate`, and dedicated `Stop` actions
+  - Animation speed presets (`Slow`, `Medium`, `Fast`, `Max`) with persistent `Looping` state until stopped
 - **PWA Housekeeping**: Fixed broken screenshot references in `manifest.json`; updated service worker cache name to match current version; added `.claude/` to `.gitignore`
 
 ### Version 2.0.0 (February 2026)

@@ -15,6 +15,13 @@ let settings = {
   yAxisMax: 80
 };
 
+// Per-room "blink on motion" toggle (persisted to localStorage)
+const roomBlinkOnMotion = {};
+
+// Track the previous motion state per room so we can detect onset
+// (false → true transitions) without flashing on every poll while motion stays true.
+const prevMotionState = new Map();
+
 // Update interval (will be updated from settings)
 let UPDATE_INTERVAL = 10000;
 let updateIntervalId = null;
@@ -172,11 +179,25 @@ function loadRoomTempOffsets() {
   }
 }
 
+function saveRoomBlinkSettings() {
+  localStorage.setItem('hueRoomBlinkOnMotion', JSON.stringify(roomBlinkOnMotion));
+}
+
+function loadRoomBlinkSettings() {
+  const saved = localStorage.getItem('hueRoomBlinkOnMotion');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      Object.assign(roomBlinkOnMotion, parsed);
+    } catch (e) { /* ignore malformed data */ }
+  }
+}
+
 // Update footer text with current poll rate
 function updateFooter() {
   const footerText = document.getElementById('footer-text');
   if (footerText) {
-    footerText.textContent = `Updates and polls Hue Bridge every ${settings.pollRate} seconds | Data persisted to SQLite database | v1.2`;
+    footerText.textContent = `Updates and polls Hue Bridge every ${settings.pollRate} seconds | Data persisted to SQLite database | v2.3`;
   }
 }
 
@@ -316,6 +337,17 @@ function scheduleRoomChartRefresh(roomId) {
   }, 120);
 }
 
+function initBlinkToggleHandlers() {
+  const roomsContainer = document.getElementById('rooms-container');
+  roomsContainer.addEventListener('change', (e) => {
+    const input = e.target.closest('.blink-toggle-input');
+    if (!input) return;
+    const roomId = input.dataset.room;
+    roomBlinkOnMotion[roomId] = input.checked;
+    saveRoomBlinkSettings();
+  });
+}
+
 function initTempOffsetHandlers() {
   const roomsContainer = document.getElementById('rooms-container');
 
@@ -338,6 +370,110 @@ function initTempOffsetHandlers() {
 }
 
 // Initialize the application
+// ── Room reordering (drag and drop) ───────────────────────────────
+const ROOM_ORDER_STORAGE_KEY = 'hueRoomOrder';
+
+function getSavedRoomOrder() {
+  try {
+    const raw = localStorage.getItem(ROOM_ORDER_STORAGE_KEY);
+    return Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveRoomOrderFromDOM() {
+  const container = document.getElementById('rooms-container');
+  if (!container) return;
+  const ids = [...container.querySelectorAll('.room-card')].map(c => c.id.replace(/^room-/, ''));
+  try { localStorage.setItem(ROOM_ORDER_STORAGE_KEY, JSON.stringify(ids)); } catch {}
+}
+
+// Sort an array of rooms by the saved order. Rooms not in the saved order
+// preserve their relative position at the end.
+function applySavedRoomOrder(rooms) {
+  const order = getSavedRoomOrder();
+  if (order.length === 0) return rooms;
+  const indexMap = new Map(order.map((id, i) => [String(id), i]));
+  return [...rooms].sort((a, b) => {
+    const ai = indexMap.has(String(a.id)) ? indexMap.get(String(a.id)) : Infinity;
+    const bi = indexMap.has(String(b.id)) ? indexMap.get(String(b.id)) : Infinity;
+    return ai - bi;
+  });
+}
+
+function initRoomDragDrop() {
+  const container = document.getElementById('rooms-container');
+  if (!container) return;
+  let dragging = null;
+
+  // Only allow drag to initiate from the .room-drag-handle.
+  // Card is non-draggable by default; we flip draggable=true on handle
+  // mousedown/touchstart, then back to false on dragend.
+  container.addEventListener('mousedown', (e) => {
+    const handle = e.target.closest('.room-drag-handle');
+    if (!handle) return;
+    const card = handle.closest('.room-card');
+    if (card) card.draggable = true;
+  });
+
+  container.addEventListener('dragstart', (e) => {
+    const card = e.target.closest('.room-card');
+    if (!card || !card.draggable) { e.preventDefault(); return; }
+    dragging = card;
+    card.classList.add('room-card-dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    // Required for Firefox to start the drag
+    try { e.dataTransfer.setData('text/plain', card.id); } catch {}
+  });
+
+  container.addEventListener('dragend', () => {
+    if (dragging) {
+      dragging.classList.remove('room-card-dragging');
+      dragging.draggable = false;
+    }
+    dragging = null;
+    saveRoomOrderFromDOM();
+  });
+
+  container.addEventListener('dragover', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    // Find the closest non-dragging card to the cursor and insert
+    // dragging before/after it based on horizontal position relative
+    // to that card's centre (works for grid layouts).
+    const cards = [...container.querySelectorAll('.room-card:not(.room-card-dragging)')];
+    if (cards.length === 0) return;
+
+    let target = null;
+    let bestDist = Infinity;
+    for (const card of cards) {
+      const box = card.getBoundingClientRect();
+      const cx = box.left + box.width / 2;
+      const cy = box.top + box.height / 2;
+      const d = Math.hypot(e.clientX - cx, e.clientY - cy);
+      if (d < bestDist) { bestDist = d; target = card; }
+    }
+    if (!target) return;
+
+    const box = target.getBoundingClientRect();
+    const insertAfter = e.clientX > box.left + box.width / 2;
+    if (insertAfter) {
+      if (target.nextSibling !== dragging) target.parentNode.insertBefore(dragging, target.nextSibling);
+    } else {
+      if (target !== dragging) target.parentNode.insertBefore(dragging, target);
+    }
+  });
+
+  // Prevent the drag handle from triggering text selection on quick clicks
+  container.addEventListener('click', (e) => {
+    if (e.target.closest('.room-drag-handle')) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  });
+}
+
 async function init() {
   console.log('Initializing Hue Temperature Dashboard...');
 
@@ -347,6 +483,7 @@ async function init() {
   // Load per-room time range selections from localStorage
   loadRoomTimeRanges();
   loadRoomTempOffsets();
+  loadRoomBlinkSettings();
 
   // Update footer with current settings
   updateFooter();
@@ -357,6 +494,8 @@ async function init() {
   // Initialize time range button handlers
   initTimeRangeHandlers();
   initTempOffsetHandlers();
+  initBlinkToggleHandlers();
+  initRoomDragDrop();
 
   // Load initial data
   await fetchAndRenderRooms();
@@ -386,8 +525,11 @@ async function fetchAndRenderRooms() {
     updateStatus('active', `${data.rooms.length} room${data.rooms.length !== 1 ? 's' : ''} connected`);
     updateLastUpdateTime(data.lastPoll);
 
+    // Apply user's saved drag-and-drop order before rendering
+    const orderedRooms = applySavedRoomOrder(data.rooms);
+
     // Render or update each room
-    for (const room of data.rooms) {
+    for (const room of orderedRooms) {
       currentRooms.set(room.id, room);
       await renderRoom(room);
     }
@@ -412,8 +554,37 @@ async function renderRoom(room) {
     updateRoomCard(card, room);
   }
 
+  // Motion onset: flash the whole page when motion transitions from false → true
+  // (only if THIS room has the per-room blink toggle on, and only once per onset)
+  const wasDetected = prevMotionState.get(room.id) === true;
+  const nowDetected = !!room.motionDetected;
+  if (roomBlinkOnMotion[room.id] && !wasDetected && nowDetected) {
+    flashPageForMotion();
+  }
+  prevMotionState.set(room.id, nowDetected);
+
   // Fetch detailed data for chart
   await updateRoomChart(room.id);
+}
+
+// Singleton overlay used for the page-level flash.
+let motionFlashOverlay = null;
+function getMotionFlashOverlay() {
+  if (motionFlashOverlay && document.body.contains(motionFlashOverlay)) return motionFlashOverlay;
+  motionFlashOverlay = document.createElement('div');
+  motionFlashOverlay.id = 'motion-flash-overlay';
+  motionFlashOverlay.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(motionFlashOverlay);
+  return motionFlashOverlay;
+}
+
+function flashPageForMotion() {
+  const overlay = getMotionFlashOverlay();
+  // Restart the animation even if it's already running (e.g. two rooms tripping at once)
+  overlay.classList.remove('motion-flash-active');
+  void overlay.offsetWidth;
+  overlay.classList.add('motion-flash-active');
+  setTimeout(() => overlay.classList.remove('motion-flash-active'), 2400);
 }
 
 // Create a new room card element
@@ -436,6 +607,7 @@ function createRoomCard(room) {
 
   card.innerHTML = `
     <div class="room-header">
+      <button class="room-drag-handle" aria-label="Drag to reorder" title="Drag to reorder">⋮⋮</button>
       <h2 class="room-name">${escapeHtml(room.name)}</h2>
     </div>
     <div class="room-temp">
@@ -453,6 +625,19 @@ function createRoomCard(room) {
       <div class="sensor-item">
         <span class="sensor-label">Last motion:</span>
         <span class="sensor-value">${lastMotionDisplay}</span>
+      </div>
+      <div class="sensor-item blink-toggle-item">
+        <span class="sensor-label">Blink on motion:</span>
+        <label class="blink-toggle-switch" title="Flash the page when this room detects motion">
+          <input
+            type="checkbox"
+            class="blink-toggle-input"
+            data-room="${room.id}"
+            ${roomBlinkOnMotion[room.id] ? 'checked' : ''}
+            aria-label="Blink on motion for ${escapeHtml(room.name)}"
+          >
+          <span class="blink-toggle-slider"></span>
+        </label>
       </div>
       <div class="sensor-item temp-offset-item">
         <span class="sensor-label">Temp offset:</span>

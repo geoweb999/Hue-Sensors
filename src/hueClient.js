@@ -1,3 +1,4 @@
+import http from 'http';
 import https from 'https';
 import { config } from './config.js';
 import { logger } from './logger.js';
@@ -13,81 +14,113 @@ class HueClient {
     return String(path).split(this.apiToken).join('[REDACTED]');
   }
 
+  _extractResponseMeta(res, data) {
+    const contentType = String(res?.headers?.['content-type'] || '').toLowerCase();
+    const trimmed = String(data || '').trim();
+    const isHtml = contentType.includes('text/html') || trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html');
+    const preview = trimmed.slice(0, 120);
+    return { contentType, isHtml, preview };
+  }
+
   _request(path, method = 'GET', body = null) {
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
       const safePath = this._sanitizePath(path);
+      const attemptOrder = [
+        { protocol: 'https', transport: https, port: 443, rejectUnauthorized: false },
+        { protocol: 'http', transport: http, port: 80 }
+      ];
+
       logger.debug('HUE_REQUEST', 'Hue v1 request started', {
         apiVersion: 'v1',
         method,
-        path: safePath
+        path: safePath,
+        protocolFallback: 'https->http'
       });
 
-      const options = {
-        hostname: this.bridgeIp,
-        port: 443,
-        path,
-        method,
-        rejectUnauthorized: false // Hue Bridge uses self-signed cert
+      const attemptRequest = (index, lastError = null) => {
+        if (index >= attemptOrder.length) {
+          reject(lastError || new Error('Failed to connect to Hue Bridge'));
+          return;
+        }
+
+        const cfg = attemptOrder[index];
+        const options = {
+          hostname: this.bridgeIp,
+          port: cfg.port,
+          path,
+          method,
+          ...(cfg.rejectUnauthorized === false ? { rejectUnauthorized: false } : {})
+        };
+        if (body) {
+          options.headers = { 'Content-Type': 'application/json' };
+        }
+
+        const req = cfg.transport.request(options, (res) => {
+          let data = '';
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
+          res.on('end', () => {
+            const durationMs = Date.now() - startedAt;
+            const responseMeta = this._extractResponseMeta(res, data);
+            try {
+              const parsed = JSON.parse(data);
+              const responseFields = {
+                apiVersion: 'v1',
+                method,
+                path: safePath,
+                status: res.statusCode,
+                durationMs,
+                protocol: cfg.protocol
+              };
+              if ((res.statusCode || 0) >= 400) {
+                logger.warn('HUE_RESPONSE', 'Hue v1 response returned error status', responseFields);
+              } else {
+                logger.debug('HUE_RESPONSE', 'Hue v1 response received', responseFields);
+              }
+              resolve(parsed);
+            } catch (error) {
+              const parseError = responseMeta.isHtml
+                ? new Error('Hue bridge returned HTML instead of JSON. Check bridge IP, API token, and bridge availability.')
+                : new Error('Hue bridge returned a non-JSON response.');
+
+              logger.warn('HUE_WARNING', 'Hue v1 response parse failed; trying fallback protocol if available', {
+                apiVersion: 'v1',
+                method,
+                path: safePath,
+                status: res.statusCode,
+                durationMs,
+                protocol: cfg.protocol,
+                contentType: responseMeta.contentType,
+                bodyPreview: responseMeta.preview,
+                error: parseError.message
+              });
+
+              attemptRequest(index + 1, parseError);
+            }
+          });
+        });
+
+        req.on('error', (error) => {
+          logger.warn('HUE_WARNING', 'Hue v1 transport failed; trying fallback protocol if available', {
+            apiVersion: 'v1',
+            method,
+            path: safePath,
+            durationMs: Date.now() - startedAt,
+            protocol: cfg.protocol,
+            error: error.message
+          });
+          attemptRequest(index + 1, new Error(`Failed to connect to Hue Bridge via ${cfg.protocol}: ${error.message}`));
+        });
+
+        if (body) {
+          req.write(JSON.stringify(body));
+        }
+        req.end();
       };
 
-      if (body) {
-        options.headers = { 'Content-Type': 'application/json' };
-      }
-
-      const req = https.request(options, (res) => {
-        let data = '';
-
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-
-        res.on('end', () => {
-          const durationMs = Date.now() - startedAt;
-          try {
-            const parsed = JSON.parse(data);
-            const responseFields = {
-              apiVersion: 'v1',
-              method,
-              path: safePath,
-              status: res.statusCode,
-              durationMs
-            };
-            if ((res.statusCode || 0) >= 400) {
-              logger.warn('HUE_RESPONSE', 'Hue v1 response returned error status', responseFields);
-            } else {
-              logger.debug('HUE_RESPONSE', 'Hue v1 response received', responseFields);
-            }
-            resolve(parsed);
-          } catch (error) {
-            logger.error('HUE_ERROR', 'Failed to parse Hue v1 response', {
-              apiVersion: 'v1',
-              method,
-              path: safePath,
-              status: res.statusCode,
-              durationMs,
-              error
-            });
-            reject(new Error(`Failed to parse Hue API response: ${error.message}`));
-          }
-        });
-      });
-
-      req.on('error', (error) => {
-        logger.error('HUE_ERROR', 'Failed to connect to Hue bridge (v1)', {
-          apiVersion: 'v1',
-          method,
-          path: safePath,
-          durationMs: Date.now() - startedAt,
-          error
-        });
-        reject(new Error(`Failed to connect to Hue Bridge: ${error.message}`));
-      });
-
-      if (body) {
-        req.write(JSON.stringify(body));
-      }
-      req.end();
+      attemptRequest(0);
     });
   }
 
@@ -119,6 +152,7 @@ class HueClient {
         res.on('data', (chunk) => { data += chunk; });
         res.on('end', () => {
           const durationMs = Date.now() - startedAt;
+          const responseMeta = this._extractResponseMeta(res, data);
           try {
             const parsed = JSON.parse(data);
             const responseFields = {
@@ -135,15 +169,20 @@ class HueClient {
             }
             resolve(parsed);
           } catch (error) {
-            logger.error('HUE_ERROR', 'Failed to parse Hue v2 response', {
+            const parseError = responseMeta.isHtml
+              ? new Error('Hue bridge returned HTML instead of JSON. Check bridge IP, API token, and bridge availability.')
+              : new Error('Hue bridge returned a non-JSON v2 response.');
+            logger.warn('HUE_WARNING', 'Hue v2 response was not valid JSON — endpoint may be unsupported on this firmware', {
               apiVersion: 'v2',
               method,
               path: safePath,
               status: res.statusCode,
               durationMs,
-              error
+              contentType: responseMeta.contentType,
+              bodyPreview: responseMeta.preview,
+              error: parseError.message
             });
-            reject(new Error(`Failed to parse Hue v2 API response: ${error.message}`));
+            reject(parseError);
           }
         });
       });
@@ -205,19 +244,47 @@ class HueClient {
   }
 
   async createScene(name, groupId, lightIds) {
+    const getHueErrors = (payload) => {
+      if (Array.isArray(payload)) {
+        return payload
+          .filter((entry) => entry?.error)
+          .map((entry) => entry.error?.description || JSON.stringify(entry.error))
+          .filter(Boolean);
+      }
+      return [];
+    };
+
+    const sceneBody = groupId
+      // For GroupScene, sending "lights" can conflict on newer bridges.
+      ? { name, type: 'GroupScene', group: groupId, recycle: false }
+      : { name, type: 'LightScene', lights: lightIds, recycle: false };
+
     const result = await this._request(
       `/api/${this.apiToken}/scenes`,
       'POST',
-      { name, lights: lightIds, type: 'GroupScene', group: groupId, recycle: false }
+      sceneBody
     );
+    const createErrors = getHueErrors(result);
+    if (createErrors.length > 0) {
+      throw new Error(`Bridge rejected scene creation: ${createErrors.join('; ')}`);
+    }
+
     const idEntry = (Array.isArray(result) ? result : []).find(r => r.success?.id);
-    if (!idEntry) throw new Error('Failed to create scene');
+    if (!idEntry) {
+      throw new Error('Bridge did not return a scene id after creation');
+    }
+
     const sceneId = idEntry.success.id;
-    await this._request(
+    const storeResult = await this._request(
       `/api/${this.apiToken}/scenes/${sceneId}`,
       'PUT',
       { storelightstate: true }
     );
+    const storeErrors = getHueErrors(storeResult);
+    if (storeErrors.length > 0) {
+      throw new Error(`Scene created but failed to store light state: ${storeErrors.join('; ')}`);
+    }
+
     return sceneId;
   }
 
@@ -236,6 +303,26 @@ class HueClient {
     );
   }
 
+  async updateScene(sceneId, updates = {}) {
+    return this._request(
+      `/api/${this.apiToken}/scenes/${sceneId}`,
+      'PUT',
+      updates
+    );
+  }
+
+  async getScene(sceneId) {
+    return this._request(`/api/${this.apiToken}/scenes/${sceneId}`);
+  }
+
+  async setSceneLightState(sceneId, lightId, stateObj) {
+    return this._request(
+      `/api/${this.apiToken}/scenes/${sceneId}/lightstates/${lightId}`,
+      'PUT',
+      stateObj
+    );
+  }
+
   // ── Hue CLIP API v2 methods ────────────────────────────────────────────────
 
   // Get all v2 rooms (includes id_v1 and services[] with grouped_light rid)
@@ -243,10 +330,24 @@ class HueClient {
     return this._v2Request('/room');
   }
 
+  // Get all v2 zones (some v1 groups map to zones instead of rooms)
+  async v2GetZones() {
+    return this._v2Request('/zone');
+  }
+
   // Get all v2 lights (includes id_v1 linking to v1 light ID)
   async v2GetLights() {
     return this._v2Request('/light');
   }
+
+  // Sensor resource fetchers — used by GET /api/rooms/:groupId/devices
+  async v2GetTemperature()        { return this._v2Request('/temperature'); }
+  async v2GetMotion()             { return this._v2Request('/motion'); }
+  async v2GetLightLevel()         { return this._v2Request('/light_level'); }
+  async v2GetDevices()            { return this._v2Request('/device'); }
+  async v2GetButtons()            { return this._v2Request('/button'); }
+  async v2GetDevicePower()        { return this._v2Request('/device_power'); }
+  async v2GetZigbeeConnectivity() { return this._v2Request('/zigbee_connectivity'); }
 
   // Apply a named effect to a single light (candle, fire, sparkle, colorloop, no_effect, etc.)
   async v2SetLightEffect(v2LightId, effect) {

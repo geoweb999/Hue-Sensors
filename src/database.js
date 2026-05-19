@@ -63,6 +63,35 @@ class HueDatabase {
       )
     `);
 
+    // Create persistent scene loops table (server-owned room animation playlists)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS scene_loops (
+        group_id TEXT PRIMARY KEY,
+        is_running INTEGER NOT NULL DEFAULT 0,
+        dwell_ms INTEGER NOT NULL DEFAULT 8000,
+        loop_mode TEXT NOT NULL DEFAULT 'sequential',
+        current_index INTEGER NOT NULL DEFAULT 0,
+        playlist_json TEXT NOT NULL,
+        last_error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
+    // Create persistent dynamic scene metadata table (shared across clients)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS dynamic_scenes (
+        scene_id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        palette_json TEXT NOT NULL,
+        speed REAL NOT NULL DEFAULT 0.5,
+        choreography_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
     // Store schema version
     const versionStmt = this.db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
     versionStmt.run('schema_version', '1.0');
@@ -124,6 +153,63 @@ class HueDatabase {
 
       deleteOldReadings: this.db.prepare(`
         DELETE FROM readings WHERE timestamp < ?
+      `),
+
+      upsertSceneLoop: this.db.prepare(`
+        INSERT INTO scene_loops (
+          group_id, is_running, dwell_ms, loop_mode, current_index, playlist_json, last_error, created_at, updated_at
+        ) VALUES (
+          @group_id, @is_running, @dwell_ms, @loop_mode, @current_index, @playlist_json, @last_error, @created_at, @updated_at
+        )
+        ON CONFLICT(group_id) DO UPDATE SET
+          is_running = excluded.is_running,
+          dwell_ms = excluded.dwell_ms,
+          loop_mode = excluded.loop_mode,
+          current_index = excluded.current_index,
+          playlist_json = excluded.playlist_json,
+          last_error = excluded.last_error,
+          updated_at = excluded.updated_at
+      `),
+
+      getSceneLoopByGroup: this.db.prepare(`
+        SELECT * FROM scene_loops WHERE group_id = ?
+      `),
+
+      getRunningSceneLoops: this.db.prepare(`
+        SELECT * FROM scene_loops WHERE is_running = 1
+      `),
+
+      deleteSceneLoopByGroup: this.db.prepare(`
+        DELETE FROM scene_loops WHERE group_id = ?
+      `),
+
+      upsertDynamicScene: this.db.prepare(`
+        INSERT INTO dynamic_scenes (
+          scene_id, group_id, name, palette_json, speed, choreography_json, created_at, updated_at
+        ) VALUES (
+          @scene_id, @group_id, @name, @palette_json, @speed, @choreography_json, @created_at, @updated_at
+        )
+        ON CONFLICT(scene_id) DO UPDATE SET
+          group_id = excluded.group_id,
+          name = excluded.name,
+          palette_json = excluded.palette_json,
+          speed = excluded.speed,
+          choreography_json = excluded.choreography_json,
+          updated_at = excluded.updated_at
+      `),
+
+      getDynamicScenesByGroup: this.db.prepare(`
+        SELECT * FROM dynamic_scenes
+        WHERE group_id = ?
+        ORDER BY LOWER(name) ASC, scene_id ASC
+      `),
+
+      getDynamicSceneById: this.db.prepare(`
+        SELECT * FROM dynamic_scenes WHERE scene_id = ?
+      `),
+
+      deleteDynamicSceneById: this.db.prepare(`
+        DELETE FROM dynamic_scenes WHERE scene_id = ?
       `)
     };
   }
@@ -257,6 +343,119 @@ class HueDatabase {
       dbSizeBytes: dbSize,
       dbSizeMB: (dbSize / 1024 / 1024).toFixed(2)
     };
+  }
+
+  parseSceneLoopRow(row) {
+    if (!row) return null;
+    let playlist = [];
+    try {
+      const parsed = JSON.parse(row.playlist_json || '[]');
+      if (Array.isArray(parsed)) playlist = parsed;
+    } catch {
+      playlist = [];
+    }
+    return {
+      groupId: String(row.group_id),
+      isRunning: Number(row.is_running) === 1,
+      dwellMs: Number(row.dwell_ms) || 8000,
+      mode: String(row.loop_mode || 'sequential'),
+      currentIndex: Number(row.current_index) || 0,
+      playlist,
+      lastError: row.last_error || null,
+      createdAt: Number(row.created_at) || null,
+      updatedAt: Number(row.updated_at) || null
+    };
+  }
+
+  upsertSceneLoop(loop) {
+    const now = Date.now();
+    const existing = this.stmts.getSceneLoopByGroup.get(String(loop.groupId));
+    this.stmts.upsertSceneLoop.run({
+      group_id: String(loop.groupId),
+      is_running: loop.isRunning ? 1 : 0,
+      dwell_ms: Number(loop.dwellMs) || 8000,
+      loop_mode: String(loop.mode || 'sequential'),
+      current_index: Number(loop.currentIndex) || 0,
+      playlist_json: JSON.stringify(Array.isArray(loop.playlist) ? loop.playlist : []),
+      last_error: loop.lastError || null,
+      created_at: existing ? existing.created_at : now,
+      updated_at: now
+    });
+    return this.getSceneLoopByGroup(loop.groupId);
+  }
+
+  getSceneLoopByGroup(groupId) {
+    const row = this.stmts.getSceneLoopByGroup.get(String(groupId));
+    return this.parseSceneLoopRow(row);
+  }
+
+  getRunningSceneLoops() {
+    const rows = this.stmts.getRunningSceneLoops.all();
+    return rows.map((row) => this.parseSceneLoopRow(row)).filter(Boolean);
+  }
+
+  deleteSceneLoopByGroup(groupId) {
+    return this.stmts.deleteSceneLoopByGroup.run(String(groupId)).changes;
+  }
+
+  parseDynamicSceneRow(row) {
+    if (!row) return null;
+    let palette = [];
+    let choreography = null;
+    try {
+      const parsedPalette = JSON.parse(row.palette_json || '[]');
+      if (Array.isArray(parsedPalette)) palette = parsedPalette;
+    } catch {
+      palette = [];
+    }
+    try {
+      const parsedChoreography = JSON.parse(row.choreography_json || 'null');
+      if (parsedChoreography && typeof parsedChoreography === 'object') choreography = parsedChoreography;
+    } catch {
+      choreography = null;
+    }
+    return {
+      sceneId: String(row.scene_id),
+      groupId: String(row.group_id),
+      name: String(row.name || ''),
+      palette,
+      speed: Number(row.speed) || 0.5,
+      choreography,
+      createdAt: Number(row.created_at) || null,
+      updatedAt: Number(row.updated_at) || null
+    };
+  }
+
+  upsertDynamicScene(scene) {
+    const now = Date.now();
+    const existing = this.stmts.getDynamicSceneById.get(String(scene.sceneId));
+    this.stmts.upsertDynamicScene.run({
+      scene_id: String(scene.sceneId),
+      group_id: String(scene.groupId),
+      name: String(scene.name || '').trim() || `Dynamic ${scene.sceneId}`,
+      palette_json: JSON.stringify(Array.isArray(scene.palette) ? scene.palette : []),
+      speed: Number(scene.speed) || 0.5,
+      choreography_json: scene.choreography ? JSON.stringify(scene.choreography) : null,
+      created_at: existing ? existing.created_at : now,
+      updated_at: now
+    });
+    return this.getDynamicSceneById(scene.sceneId);
+  }
+
+  getDynamicScenesByGroup(groupId) {
+    return this.stmts.getDynamicScenesByGroup
+      .all(String(groupId))
+      .map((row) => this.parseDynamicSceneRow(row))
+      .filter(Boolean);
+  }
+
+  getDynamicSceneById(sceneId) {
+    const row = this.stmts.getDynamicSceneById.get(String(sceneId));
+    return this.parseDynamicSceneRow(row);
+  }
+
+  deleteDynamicSceneById(sceneId) {
+    return this.stmts.deleteDynamicSceneById.run(String(sceneId)).changes;
   }
 
   // Vacuum database to reclaim space
